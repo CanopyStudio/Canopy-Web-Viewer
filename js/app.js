@@ -1,55 +1,28 @@
-// Canopy Board on a phone: a project's lists from Dropbox, ticked, added to, edited and put in order, saved back as
-// they change. Three pages: the files, a project's lists, and one list full screen.
+// Canopy Web Viewer: a Canopy Board project from Dropbox on a phone. Its lists (ticked, added to, edited, put in order,
+// linked to boards and objects, and new ones made), its boards, and the whole canvas to look around, photos added to
+// it from the phone. Changes are saved back as they happen.
 
 import * as cnpy from "./cnpy.js";
 import * as dbx from "./dropbox.js";
+import * as render from "./render.js";
+import { Viewer, thumbnail } from "./viewer.js";
 
 const app = document.getElementById("app");
+const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ---- what is open ----
 
-let page = "files";       // files, project or list
 let folder = remembered("canopy.folder", "");
-let project = null;       // { path, name, local, base: { doc, rev }, steps, lists }
-let listId = null;        // the list open full screen
-let arranging = false;    // the list's Edit mode: handles, delete and kinds
-let editing = null;       // the entry being typed in: { id } or, for a new one, { fresh: true, after, kind }
-let problem = "";         // what went wrong, shown on the page until the next one
+let project = null;       // { path, name, local, base: { doc, rev }, steps, view, scene, get, pictures }
+let tab = remembered("canopy.tab", "lists");   // lists, boards or canvas
+let open = null;          // over the tab: { kind: "list" | "board", id }
+let arranging = false;    // a list's Edit mode: handles, delete and kinds
+let editing = null;       // the entry being typed in: { id } or, for a new one, { fresh: true, after, kind }; or { title: true }
+let problem = "";         // what went wrong, shown until the next one
+let canvasView = null, boardView = null;   // the viewers on show
 
 function remembered(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
-function remember(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) { } }
-
-// ---- colours, as the desktop app makes a list's from its own colour ----
-
-function rgb(hex) { const h = (hex || "").replace("#", "").slice(-6); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
-function hex(c) { return "#" + c.map(v => Math.round(v).toString(16).padStart(2, "0")).join(""); }
-function toHsv([r, g, b])
-{
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), d = max - Math.min(r, g, b);
-    const h = d === 0 ? 0 : max === r ? 60 * (((g - b) / d + 6) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
-    return [h, max === 0 ? 0 : d / max, max];
-}
-function fromHsv(h, s, v)
-{
-    const c = v * s, x = c * (1 - Math.abs(h / 60 % 2 - 1)), m = v - c, k = Math.floor(h / 60) % 6;
-    const [r, g, b] = k === 0 ? [c, x, 0] : k === 1 ? [x, c, 0] : k === 2 ? [0, c, x] : k === 3 ? [0, x, c] : k === 4 ? [x, 0, c] : [c, 0, x];
-    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
-}
-function derived(fill, i)   // one colour of the set made from a list's colour (7 its headings, 10 its card, 11 its entries)
-{
-    const [h, s] = toHsv(rgb(fill)), k = Math.min(1, s / 0.5);
-    const at = { 7: [0.32, 1.0], 10: [0.22, 0.22], 11: [0.22, 0.29] }[i];
-    return hex(fromHsv(h, at[0] * k, at[1]));
-}
-function mix(a, b, t) { const x = rgb(a), y = rgb(b); return hex(x.map((v, i) => Math.floor(v + (y[i] - v) * t + 0.5))); }
-function dark(c) { const [r, g, b] = rgb(c); return (r * 299 + g * 587 + b * 114) / 1000 <= 140; }
-function look(list)
-{
-    const card = list.fill ? derived(list.fill, 10) : "#262927", tile = list.fill ? derived(list.fill, 11) : "#313534";
-    const head = list.fill ? derived(list.fill, 7) : "#D2F6D1";
-    return { card, tile, head, stripe: list.ink || "#428C6A", ink: dark(tile) ? "#EAECEB" : "#151616", onCard: dark(card) ? "#EAECEB" : "#151616", box: mix(tile, head, 0.35) };
-}
+function remember(key, v) { try { if (v === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch (e) { } }
 
 // ---- small pieces ----
 
@@ -59,42 +32,43 @@ const icons = {
     file: '<rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 9h8M8 12.5h8M8 16h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
     up: '<path d="M12 19V6M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     more: '<circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/>',
-    refresh: '<path d="M19 12a7 7 0 1 1-2.05-4.95M19 5v4h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     tick: '<path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
     handle: '<path d="M6 9h12M6 15h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
     remove: '<circle cx="12" cy="12" r="9" fill="currentColor"/><path d="M8 12h8" stroke="#1a1a1a" stroke-width="2.4" stroke-linecap="round"/>',
-    link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+    link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    plus: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+    photo: '<rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M4 17l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+    lists: '<rect x="4" y="4" width="7" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="15" width="7" height="5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="12" width="7" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+    boards: '<rect x="3" y="6" width="11" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="10" y="11" width="11" height="8" rx="1.5" fill="currentColor" opacity=".35" stroke="currentColor" stroke-width="1.8"/>',
+    canvas: '<path d="M4 4h16v16H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 9h16M4 15h16M9 4v16M15 4v16" stroke="currentColor" stroke-width="1" opacity=".6"/>',
+    fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
 };
 function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
-function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
 function text(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-function plain(s) { return (s || "").replace(/\*\*(\S[\s\S]*?\S|\S)\*\*/g, "$1").replace(/\*([^\s*][^*]*?[^\s*]|[^\s*])\*/g, "$1").split("\n")[0]; }
-function bar(title, left, right) { return '<header class="bar">' + (left || "") + "<h1>" + text(title) + "</h1>" + (right || "") + "</header>"; }
+function bar(title, left, right, cls) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + text(title) + "</h1>" + (right || "") + "</header>"; }
 function fileName(path) { return path.split("/").pop().replace(/\.cnpy$/i, ""); }
+function iconButton(does, name, label, value) { return '<button class="icon" data-do="' + does + '"' + (value ? ' data-value="' + text(value) + '"' : "") + ' aria-label="' + label + '">' + icon(name) + "</button>"; }
 
-// ---- the pages ----
+// ---- the files ----
 
 let draws = 0;   // how many times a page has been drawn
 function show()
 {
     draws++;
-    const typing = app.querySelector("textarea");
+    const typing = app.querySelector("textarea, input.title-edit");
     if (typing) typing.dataset.gone = "1";   // (drawn over: its blur, as it goes, is not the person leaving it)
-    if (page === "list" && project && current()) return showList();
-    if (page === "project" && project) return showProject();
+    if (project) return showProject();
     return showFiles();
 }
 
-function current() { return project && project.lists.find(l => l.id === listId); }
-
 async function showFiles()
 {
-    page = "files";
+    closeViewers();
     const signed = dbx.ready() && dbx.signedIn();
     if (!signed)
     {
-        app.innerHTML = '<div class="hello"><img src="icons/icon-180.png" alt=""><h1>Canopy Board</h1>'
-            + (dbx.ready() ? "<p>Sign in to Dropbox to open your projects' lists.</p><button class=\"main-button\" data-do=\"signin\">Sign in with Dropbox</button>"
+        app.innerHTML = '<div class="hello"><img src="icons/icon-180.png" alt=""><h1>Canopy Web Viewer</h1>'
+            + (dbx.ready() ? "<p>Sign in to Dropbox to open your Canopy Board projects.</p><button class=\"main-button\" data-do=\"signin\">Sign in with Dropbox</button>"
                            : "<p>Dropbox isn't set up for this page yet: its app key goes in config.js.</p>")
             + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
             + localOpener() + "</div>";
@@ -102,8 +76,8 @@ async function showFiles()
         return;
     }
     const recent = remembered("canopy.recent", []);
-    app.innerHTML = bar("Canopy Board", "", '<button class="icon" data-do="account" aria-label="Account">' + icon("more") + "</button>")
-        + '<main class="page">'
+    app.innerHTML = bar("Canopy Web Viewer", "", iconButton("account", "more", "Account"))
+        + '<main class="page enter">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
         + (recent.length && folder === "" ? '<div class="section">Recent</div><div class="rows">' + recent.map(r => item("file", fileName(r), r.split("/").slice(0, -1).join("/") || "Dropbox", "open", r)).join("") + "</div>" : "")
         + '<div class="section">' + (folder === "" ? "Dropbox" : text(folder.split("/").pop())) + '</div>'
@@ -114,14 +88,13 @@ async function showFiles()
     let items;
     try { items = await dbx.list(folder); }
     catch (e) { return failed(e); }
-    if (page !== "files") return;
     const holder = document.getElementById("items");
+    if (!holder || project) return;
     holder.innerHTML = (folder !== "" ? item("up", "Up a folder", "", "up", "") : "")
         + items.map(i => item(i.folder ? "folder" : "file", i.folder ? i.name : fileName(i.name), i.folder ? "" : when(i.modified), i.folder ? "into" : "open", i.path)).join("")
         + (items.length === 0 ? '<div class="empty">No folders or projects here</div>' : "");
     wire(holder);
 }
-
 function item(kind, name, sub, does, value)
 {
     return '<button class="item" data-do="' + does + '" data-value="' + text(value) + '">' + icon(kind) + '<span class="label"><div class="name">' + text(name) + "</div>"
@@ -134,61 +107,217 @@ function localOpener()
         + '<input class="hidden-input" type="file" id="picker"></div>';
 }
 
+// ---- a project: three tabs (its lists, its boards, the canvas), and a list or board opened over them ----
+
+function current() { return project && open && open.kind === "list" ? project.view.lists.find(l => l.id === open.id) : null; }
+function sortedLists() { return project.view.lists.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x)); }
+
 function showProject()
 {
-    page = "project";
-    const lists = project.lists.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));
-    app.innerHTML = bar(project.name, '<button class="icon" data-do="files" aria-label="Back">' + icon("back") + "</button>", statusHtml() + refreshButton())
-        + '<main class="page">' + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
-        + (project.base.doc.readOnly ? '<div class="problem">Saved by an older version of Canopy Board: its lists can be read here, not changed. Opening and saving it on the desktop updates it.</div>' : "")
-        + (lists.length === 0 ? '<div class="empty">This project has no lists</div>' : '<div class="cards">' + lists.map(card).join("") + "</div>")
-        + (project.local ? '<div class="local"><button class="quiet-button" data-do="copy">Save a copy</button></div>' : "")
-        + "</main>";
-    wire();
+    const locked = project.base.doc.readOnly;
+    const add = locked ? "" : tab === "lists" ? iconButton("newlist", "plus", "New list") : iconButton("photo", "photo", "Add a photo");
+    let shell = app.querySelector(".project");
+    if (!shell || shell.dataset.path !== project.path)
+    {
+        app.innerHTML = '<div class="project" data-path="' + text(project.path) + '"><div id="head"></div><main id="tab"></main>'
+            + '<nav class="tabs">' + [["lists", "Lists"], ["boards", "Boards"], ["canvas", "Canvas"]].map(t => '<button data-do="tab" data-value="' + t[0] + '" class="tab-' + t[0] + '">' + icon(t[0]) + "<span>" + t[1] + "</span></button>").join("") + "</nav>"
+            + '<div id="over"></div><input class="hidden-input" type="file" accept="image/*" id="photo-picker"></div>';
+        shell = app.querySelector(".project");
+        shell.querySelector("#photo-picker").addEventListener("change", e => { const f = e.target.files[0]; e.target.value = ""; if (f) addPhoto(f); });
+        wire(shell.querySelector(".tabs"));
+        shell.dataset.tab = "";
+    }
+    shell.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.value === tab));
+    const head = shell.querySelector("#head");
+    head.innerHTML = bar(project.name, iconButton("files", "back", "Back"), statusHtml() + (tab === "canvas" ? iconButton("fitall", "fit", "Fit everything") : "") + add);
+    wire(head);
+    const holder = shell.querySelector("#tab");
+    const fresh = shell.dataset.tab !== tab;
+    shell.dataset.tab = tab;
+    if (tab === "lists") showLists(holder);
+    else if (tab === "boards") showBoards(holder);
+    else showCanvas(holder, fresh);
+    if (fresh && !calm) holder.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
+    showOver();
 }
 
-function card(l)
+// Two columns, each card going into the shorter one (so they sit together however tall they are).
+function masonry(holder, cards)
 {
-    const c = look(l), tasks = l.rows.filter(r => r.kind === "T"), done = tasks.filter(r => r.done).length;
-    const peek = l.rows.filter(r => r.kind !== "D" && (l.showDone || !r.done)).slice(0, 3);
-    return '<button class="card" data-do="list" data-value="' + text(l.id) + '" style="background:' + c.card + ";color:" + c.onCard + '">'
+    holder.innerHTML = '<div class="masonry"><div class="col"></div><div class="col"></div></div>';
+    const cols = holder.querySelectorAll(".col"), heights = [0, 0];
+    for (const c of cards)
+    {
+        const k = heights[0] <= heights[1] ? 0 : 1;
+        cols[k].appendChild(c.el);
+        heights[k] += c.weight + 1;
+    }
+}
+function element(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
+
+function showLists(holder)
+{
+    closeViewers();
+    const lists = sortedLists();
+    if (lists.length === 0) { holder.innerHTML = '<div class="empty big">No lists in this project yet' + (project.base.doc.readOnly ? "" : '<br><button class="quiet-button" data-do="newlist">New list</button>') + "</div>"; wire(holder); return; }
+    masonry(holder, lists.map(l => ({ el: element(listCard(l)), weight: 3 + Math.min(8, visible(l).length) * 1.1 })));
+    if (problem) holder.insertAdjacentHTML("afterbegin", '<div class="problem">' + text(problem) + "</div>");
+    wire(holder);
+}
+function visible(l) { return l.rows.filter(r => l.showDone || !r.done); }
+function listCard(l)
+{
+    const c = render.listLook(l), rows = visible(l), shown = rows.slice(0, 8);
+    return '<button class="lcard" data-do="list" data-value="' + text(l.id) + '" style="background:' + c.card + ";color:" + c.onCard + '">'
         + '<div class="stripe" style="background:' + c.stripe + '"></div><div class="title">' + text(l.name || "List") + "</div>"
-        + '<div class="count">' + (tasks.length ? done + " of " + tasks.length + " done" : l.rows.length + (l.rows.length === 1 ? " entry" : " entries")) + "</div>"
-        + (peek.length ? '<div class="peek">' + peek.map(r => '<div class="' + (r.done ? "done" : "") + '" style="' + (r.kind === "H" ? "font-weight:700;padding-left:2px" : "background:" + c.tile + ";color:" + c.ink) + '">' + text(plain(r.text)) + "</div>").join("") + "</div>" : "")
-        + (l.layer ? '<div class="layer">' + text(l.layer) + "</div>" : "")
+        + shown.map(r => r.kind === "D" ? '<div class="d" style="background:' + render.shade(c.tile, 0.14) + '"></div>'
+            : '<div class="e ' + r.kind + (r.done ? " done" : "") + '" style="' + (r.kind === "H" ? "" : "background:" + c.tile + ";color:" + c.ink) + '">'
+                + (r.kind === "T" ? '<span class="box" style="border-color:' + (r.color || c.box) + (r.done ? ";background:" + (r.color || c.box) : "") + '"></span>' : "")
+                + "<span>" + text(cnpy.plain(r.text)) + "</span></div>").join("")
+        + (rows.length > shown.length ? '<div class="more">+' + (rows.length - shown.length) + " more</div>" : "")
         + "</button>";
 }
 
-function showList()
+function showBoards(holder)
 {
-    page = "list";
-    const l = current(), c = look(l);
-    const showDone = remembered("canopy.done." + l.id, l.showDone);
+    closeViewers();
+    const boards = project.view && project.base.doc.boards;
+    if (!boards.length) { holder.innerHTML = '<div class="empty big">No boards in this project</div>'; return; }
+    masonry(holder, boards.map(b =>
+    {
+        const ratio = Math.max(0.35, Math.min(2.2, b.h / Math.max(1, b.w)));
+        return { el: element('<button class="bcard" data-do="board" data-value="' + text(b.id) + '"><canvas style="aspect-ratio:' + (1 / ratio) + '"></canvas><div class="name">' + text(b.name) + "</div></button>"), weight: ratio * 2 + 0.6 };
+    }));
+    wire(holder);
+    requestAnimationFrame(drawThumbs);
+}
+function drawThumbs()
+{
+    if (!project || tab !== "boards") return;
+    const doc = project.base.doc;
+    document.querySelectorAll(".bcard").forEach(el =>
+    {
+        const b = doc.boards.find(o => o.id === el.dataset.value);
+        if (b) thumbnail(el.querySelector("canvas"), project.scene, b, project.get, doc.canvas);
+    });
+}
+
+function showCanvas(holder, fresh)
+{
+    if (!canvasView || !holder.contains(canvasView.host))
+    {
+        closeViewers();
+        holder.innerHTML = '<div class="stage"></div>';
+        canvasView = new Viewer(holder.querySelector(".stage"), () => project.scene, f => project.get(f), (x, y) => tapCanvas(x, y));
+        canvasView.onFitAll = () => fitAll(true);
+        const cam = remembered("canopy.cam." + project.path, null);
+        if (cam && fresh) { canvasView.cam = cam; canvasView.redraw(); } else fitAll(false);
+    }
+    else canvasView.redraw();
+}
+function fitAll(glide) { if (canvasView) canvasView.fit(render.extent(project.scene), 0.06, glide); }
+function tapCanvas(x, y)
+{
+    const l = render.listAt(project.scene, x, y);
+    if (l) openList(l.id, null);
+}
+function closeViewers()
+{
+    if (canvasView && project) remember("canopy.cam." + project.path, canvasView.cam);
+    if (canvasView) canvasView.canvas.remove();
+    canvasView = null;
+}
+
+// ---- over the tabs: a list, or a board, opened (grown from its card) ----
+
+function showOver()
+{
+    const over = app.querySelector("#over");
+    if (!over) return;
+    if (!open) { over.innerHTML = ""; over.className = ""; boardView = null; return; }
+    if (open.kind === "list" && !current()) { open = null; return showOver(); }
+    over.className = "open";
+    if (open.kind === "list") showList(over);
+    else showBoard(over);
+}
+
+function grow(el, from)
+{
+    if (calm || !from) return;
+    const to = el.getBoundingClientRect();
+    const sx = from.width / to.width, sy = from.height / to.height;
+    el.animate([
+        { transformOrigin: "0 0", transform: "translate(" + (from.left - to.left) + "px," + (from.top - to.top) + "px) scale(" + sx + "," + sy + ")", borderRadius: "14px", opacity: 0.6 },
+        { transformOrigin: "0 0", transform: "none", borderRadius: "0px", opacity: 1 }
+    ], { duration: 380, easing: "cubic-bezier(.2,1.08,.3,1)" });
+    const inner = el.querySelector(".fade-in");
+    if (inner) inner.animate([{ opacity: 0 }, { opacity: 0 }, { opacity: 1 }], { duration: 380 });
+}
+function shrink(done)
+{
+    const over = app.querySelector("#over .sheet-wrap, #over .board-wrap");
+    const card = open && app.querySelector('[data-do="' + open.kind + '"][data-value="' + CSS.escape(open.id) + '"]');
+    if (calm || !over) return done();
+    const from = over.getBoundingClientRect(), to = card ? card.getBoundingClientRect() : null;
+    const a = to ? over.animate([{ transformOrigin: "0 0", transform: "none", opacity: 1 }, { transformOrigin: "0 0", transform: "translate(" + (to.left - from.left) + "px," + (to.top - from.top) + "px) scale(" + to.width / from.width + "," + to.height / from.height + ")", opacity: 0.4, borderRadius: "14px" }], { duration: 240, easing: "cubic-bezier(.4,0,.6,1)" })
+                 : over.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(24px)" }], { duration: 200, easing: "ease-in" });
+    a.onfinish = done;
+}
+function openList(id, card)
+{
+    const from = card ? card.getBoundingClientRect() : null;
+    open = { kind: "list", id }; arranging = false; editing = null;
+    show();
+    grow(app.querySelector("#over .sheet-wrap"), from);
+}
+function openBoard(id, card)
+{
+    const from = card ? card.getBoundingClientRect() : null;
+    open = { kind: "board", id };
+    show();
+    grow(app.querySelector("#over .board-wrap"), from);
+}
+function closeOver()
+{
+    finishTyping(false, false);
+    shrink(() => { open = null; arranging = false; editing = null; show(); });
+}
+
+function showList(over)
+{
+    const l = current(), c = render.listLook(l), locked = project.base.doc.readOnly;
+    const showDone = l.showDone;
     const rows = l.rows.filter(r => showDone || !r.done || (editing && editing.id === r.id));
-    const locked = project.base.doc.readOnly;
     let html = "";
     for (const r of rows)
     {
         html += entry(r, c);
         if (editing && editing.fresh && editing.after === r.id) html += draft(c);
     }
-    if (editing && editing.fresh && (editing.after === null || !rows.some(r => r.id === editing.after))) html = (editing.after === null ? draft(c) + html : html + draft(c));
+    if (editing && editing.fresh && (editing.after === null || !rows.some(r => r.id === editing.after))) html = editing.after === null ? draft(c) + html : html + draft(c);
     const hidden = l.rows.filter(r => r.done).length;
-    app.innerHTML = bar(l.name || "List", '<button class="icon" data-do="project" aria-label="Back">' + icon("back") + "</button>",
-            statusHtml() + (locked ? "" : '<button class="word' + (arranging ? " on" : "") + '" data-do="arrange">' + (arranging ? "Done" : "Edit") + "</button>")
-            )
-        + '<main class="sheet" style="background:' + c.card + ";color:" + c.onCard + '">'
+    let wrap = over.querySelector(".sheet-wrap");
+    const keepScroll = wrap ? wrap.querySelector(".sheet").scrollTop : 0;
+    over.innerHTML = '<div class="sheet-wrap" style="background:' + c.card + ";color:" + c.onCard + '">'
+        + bar("", iconButton("close", "back", "Back"), statusHtml() + (locked ? "" : '<button class="word' + (arranging ? " on" : "") + '" data-do="arrange">' + (arranging ? "Done" : "Edit") + "</button>" + iconButton("listmenu", "more", "List options")), "on-card")
+        + '<main class="sheet"><div class="fade-in">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
-        + '<div class="stripe" style="background:' + c.stripe + '"></div><h2 class="title">' + text(l.name || "List") + "</h2>"
+        + '<div class="stripe" style="background:' + c.stripe + '"></div>'
+        + (editing && editing.title ? '<input class="title-edit" value="' + text(l.name) + '" enterkeyhint="done">' : '<h2 class="title" data-do="retitle">' + (text(l.name) || '<span class="faint">Untitled list</span>') + "</h2>")
         + '<div class="entries" id="entries">' + html + "</div>"
         + (locked ? "" : '<div class="adders"><button class="adder" data-do="add" data-value="T">+ Add task</button>'
             + (arranging ? '<button class="adder" data-do="add" data-value="H">+ Heading</button><button class="adder" data-do="add" data-value="D">+ Divider</button>' : "") + "</div>")
         + (hidden ? '<button class="note-line" data-do="showdone">' + (showDone ? "Hide completed" : "Show " + hidden + " completed") + "</button>" : "")
-        + "</main>";
-    app.style.background = c.card;
-    wire();
-    const ta = app.querySelector("textarea");
-    if (ta) { grow(ta); ta.focus(); const n = ta.value.length; ta.setSelectionRange(n, n); }
+        + "</div></main></div>";
+    over.querySelector(".sheet").scrollTop = keepScroll;
+    wire(over);
+    const ta = over.querySelector("textarea, input.title-edit");
+    if (ta)
+    {
+        if (ta.tagName === "TEXTAREA") growArea(ta);
+        ta.focus();
+        const n = ta.value.length; ta.setSelectionRange(n, n);
+    }
 }
 
 function entry(r, c)
@@ -197,17 +326,17 @@ function entry(r, c)
     const isEditing = editing && !editing.fresh && editing.id === r.id;
     let inner = "";
     if (arranging) inner += '<button class="remove" data-do="remove" data-value="' + r.id + '" aria-label="Delete">' + icon("remove", 20) + "</button>";
-    if (r.kind === "D") inner += '<div class="line" style="background:' + mix(c.tile, dark(c.tile) ? "#ffffff" : "#000000", 0.14) + '"></div>';
+    if (r.kind === "D") inner += '<div class="line" style="background:' + render.shade(c.tile, 0.14) + '"></div>';
     else
     {
         if (r.kind === "T")
         {
             const box = r.color || c.box;
-            inner += '<button class="check" data-do="tick" data-value="' + r.id + '" aria-label="' + (r.done ? "Not done" : "Done") + '"><span style="border-color:' + box + (r.done ? ";background:" + box + ";color:" + (dark(box) ? "#fff" : "#000") : "") + '">' + (r.done ? icon("tick", 16) : "") + "</span></button>";
+            inner += '<button class="check" data-do="tick" data-value="' + r.id + '" aria-label="' + (r.done ? "Not done" : "Done") + '"><span style="border-color:' + box + (r.done ? ";background:" + box + ";color:" + (render.dark(box) ? "#fff" : "#000") : "") + '">' + (r.done ? icon("tick", 16) : "") + "</span></button>";
         }
         inner += isEditing ? '<textarea rows="1" data-id="' + r.id + '">' + text(r.text) + "</textarea>"
                            : '<div class="words" data-do="type" data-value="' + r.id + '">' + cnpy.rich(r.text) + "</div>";
-        if (r.link && !arranging) inner += '<span class="link">' + icon("link", 16) + "</span>";
+        if (r.link && !arranging && !isEditing) inner += '<button class="link" data-do="follow" data-value="' + text(r.link) + '" aria-label="Go to what it links to">' + icon("link", 18) + "</button>";
     }
     if (arranging)
     {
@@ -216,16 +345,34 @@ function entry(r, c)
     }
     return '<div class="entry ' + r.kind + (r.done ? " done" : "") + (isEditing ? " editing" : "") + '" data-id="' + r.id + '" style="' + tile + '">' + inner + "</div>";
 }
-
 function draft(c)   // a new entry being typed, not in the list until it has words
 {
     const k = editing.kind;
-    return '<div class="entry ' + k + ' editing" style="' + (k === "H" ? "" : "background:" + c.tile + ";color:" + c.ink) + '">'
+    return '<div class="entry ' + k + ' editing arriving" style="' + (k === "H" ? "" : "background:" + c.tile + ";color:" + c.ink) + '">'
         + (k === "T" ? '<span class="check"><span style="border-color:' + c.box + '"></span></span>' : "")
         + '<textarea rows="1" data-fresh="1" placeholder="' + (k === "H" ? "Heading" : "New task") + '"></textarea></div>';
 }
+function growArea(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
 
-function grow(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
+function showBoard(over)
+{
+    const b = project.base.doc.boards.find(o => o.id === open.id);
+    if (!b) { open = null; return showOver(); }
+    let wrap = over.querySelector(".board-wrap");
+    if (!wrap || wrap.dataset.id !== b.id)
+    {
+        over.innerHTML = '<div class="board-wrap" data-id="' + text(b.id) + '"><div class="head"></div><div class="stage fade-in"></div></div>';
+        wrap = over.querySelector(".board-wrap");
+        boardView = new Viewer(wrap.querySelector(".stage"), () => project.scene, f => project.get(f), (x, y) => { const l = render.listAt(project.scene, x, y); if (l) openListFromBoard(l.id); });
+        boardView.onFitAll = () => boardView.fit(b, 0.04, true);
+        boardView.fit(b, 0.04, false);
+    }
+    else boardView.redraw();
+    const head = wrap.querySelector(".head");
+    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("photo", "photo", "Add a photo")));
+    wire(head);
+}
+function openListFromBoard(id) { open = { kind: "list", id }; boardView = null; show(); grow(app.querySelector("#over .sheet-wrap"), null); }
 
 // ---- saving: what is done here kept as steps, written back on top of whatever the file now is ----
 
@@ -234,25 +381,33 @@ let saving = false, saveTimer = null, state = "saved", stateWhy = "";
 function statusHtml()
 {
     if (!project) return "";
-    if (project.local) return '<span class="status">On this phone</span>';
+    if (project.local) return '<button class="status" data-do="copy">Save a copy</button>';
     const words = { saved: "Saved", saving: "Saving…", waiting: "Not saved yet", updated: "Updated" }[state] || "";
-    return '<button class="status' + (state === "waiting" ? " warn" : "") + '" id="status" data-do="refresh" title="' + text(stateWhy || "Check for changes") + '">' + words + "</button>";   // (tapped: saved now, and checked for changes)
+    return '<button class="status' + (state === "waiting" ? " warn" : "") + '" data-do="refresh" title="' + text(stateWhy || "Check for changes") + '">' + words + "</button>";   // (tapped: saved now, and checked for changes)
 }
-function refreshButton() { return project && !project.local ? '<button class="icon" data-do="refresh" aria-label="Check for changes">' + icon("refresh", 20) + "</button>" : ""; }
 function setState(s, why)
 {
     state = s; stateWhy = why || "";
-    const at = document.getElementById("status");
-    if (at) { at.outerHTML = statusHtml(); document.getElementById("status").addEventListener("click", () => act("refresh")); }
+    app.querySelectorAll(".status").forEach(at => { at.outerHTML = statusHtml(); });
+    app.querySelectorAll(".status").forEach(at => at.addEventListener("click", () => act(at.dataset.do)));
 }
+
+// The project as the steps leave it, worked out again (and drawn again) after every change.
+function refreshView()
+{
+    project.view = cnpy.apply(project.base.doc, project.steps);
+    project.scene = render.scene(project.base.doc, project.view);
+}
+function redrawViewers() { if (canvasView) canvasView.redraw(); if (boardView) boardView.redraw(); }
 
 function step(s)
 {
     if (!project || project.base.doc.readOnly) return;
-    s.list = listId;
+    if (s.list === undefined && open && open.kind === "list") s.list = open.id;
     project.steps.push(s);
-    project.lists = cnpy.apply(project.base.doc.lists, project.steps);
+    refreshView();
     keepSteps();
+    redrawViewers();
     if (project.local) return;
     setState("saving");
     clearTimeout(saveTimer);
@@ -267,14 +422,15 @@ async function save()
     const p = project;
     try
     {
+        await photosReady(p);
         for (let tries = 0; tries < 5; tries++)
         {
             const n = p.steps.length;
-            const bytes = await cnpy.save(p.base.doc, cnpy.apply(p.base.doc.lists, p.steps.slice(0, n)));
+            const bytes = await cnpy.save(p.base.doc, cnpy.apply(p.base.doc, p.steps.slice(0, n)), p.pictures);
             try
             {
                 const rev = await dbx.write(p.path, bytes, p.base.rev);
-                p.base = { doc: await cnpy.open(bytes), rev };
+                await rebase(p, bytes, rev);
                 p.steps = p.steps.slice(n);
                 break;
             }
@@ -283,16 +439,17 @@ async function save()
                 if (!(e instanceof dbx.Conflict)) throw e;
                 // Someone saved it meanwhile: theirs read, and these steps done again on top of it.
                 const got = await dbx.read(p.path);
-                p.base = { doc: await cnpy.open(got.bytes), rev: got.rev };
+                await rebase(p, got.bytes, got.rev);
             }
         }
         if (p !== project) return;
-        project.lists = cnpy.apply(project.base.doc.lists, project.steps);
+        refreshView();
         keepSteps();
+        forgetPhotos(p);
         problem = "";
         setState(project.steps.length ? "saving" : "saved");
         if (project.steps.length) saveTimer = setTimeout(save, 400);
-        if (!editing) show();
+        if (!editing) show(); else redrawViewers();
     }
     catch (e)
     {
@@ -303,6 +460,12 @@ async function save()
     }
     finally { saving = false; }
 }
+async function rebase(p, bytes, rev)
+{
+    p.base = { doc: await cnpy.open(bytes), rev };
+    p.get = render.pictures(p.base.doc, p.pictures, onPicture);
+}
+function onPicture() { redrawViewers(); if (tab === "boards" && project && !open) { clearTimeout(onPicture.t); onPicture.t = setTimeout(drawThumbs, 60); } }
 
 // A newer version saved elsewhere, read in (only with nothing of ours waiting: that goes through saving).
 async function catchUp(quiet)
@@ -315,9 +478,9 @@ async function catchUp(quiet)
         if (rev === p.base.rev) { if (!quiet) setState("saved"); return; }
         const got = await dbx.read(p.path);
         if (p !== project || editing || project.steps.length) return;
-        project.base = { doc: await cnpy.open(got.bytes), rev: got.rev };
-        project.lists = cnpy.apply(project.base.doc.lists, project.steps);
-        if (page === "list" && !current()) page = "project";
+        await rebase(p, got.bytes, got.rev);
+        refreshView();
+        if (open && open.kind === "list" && !current()) open = null;
         show();
         setState("updated");
         setTimeout(() => { if (state === "updated") setState("saved"); }, 2500);
@@ -327,6 +490,69 @@ async function catchUp(quiet)
 setInterval(() => catchUp(true), 20000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { catchUp(true); save(); } });
 window.addEventListener("online", () => save());
+
+// ---- photos: kept on the phone (in its own storage) until they are saved into the file ----
+
+const DB = "canopy-photos";
+function store() { return new Promise((ok, no) => { const r = indexedDB.open(DB, 1); r.onupgradeneeded = () => r.result.createObjectStore("photos"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); }
+async function keepPhoto(file, bytes) { try { const db = await store(); db.transaction("photos", "readwrite").objectStore("photos").put(bytes, file); } catch (e) { } }
+async function photoBytes(file) { try { const db = await store(); return await new Promise(ok => { const r = db.transaction("photos").objectStore("photos").get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); }); } catch (e) { return null; } }
+async function photosReady(p) { for (const s of p.steps) if (s.t === "photo" && !p.pictures.has(s.photo.file)) { const b = await photoBytes(s.photo.file); if (b) p.pictures.set(s.photo.file, b); } }
+function forgetPhotos(p)
+{
+    // Saved into the file: no longer kept on the phone.
+    const waiting = new Set(p.steps.filter(s => s.t === "photo").map(s => s.photo.file));
+    for (const f of [...p.pictures.keys()]) if (!waiting.has(f) && p.base.doc.zip.file(f)) { p.pictures.delete(f); store().then(db => db.transaction("photos", "readwrite").objectStore("photos").delete(f)).catch(() => { }); }
+}
+
+// A photo from the phone: made smaller if it is very big, then placed in the board open, or the middle of the canvas.
+async function addPhoto(file)
+{
+    let img;
+    try { img = await createImageBitmap(file); }
+    catch (e) { problem = "Couldn't read that picture."; return show(); }
+    const most = 2400, k = Math.min(1, most / Math.max(img.width, img.height));
+    const pw = Math.round(img.width * k), ph = Math.round(img.height * k);
+    let bytes;
+    if (k === 1 && /png|gif/.test(file.type)) bytes = new Uint8Array(await file.arrayBuffer());   // (kept as it came)
+    else
+    {
+        const c = document.createElement("canvas");
+        c.width = pw; c.height = ph;
+        c.getContext("2d").drawImage(img, 0, 0, pw, ph);
+        const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.88));
+        bytes = new Uint8Array(await blob.arrayBuffer());
+    }
+    const id = cnpy.newId(), name = file.type === "image/gif" ? id + ".gif" : id + ".png";   // (named as the desktop app names its pictures, whatever they are inside)
+    // Where it goes: a board open: fitted in its middle; else the middle of what the canvas shows.
+    let area;
+    const b = open && open.kind === "board" ? project.base.doc.boards.find(o => o.id === open.id) : null;
+    if (b) area = { x: b.x + b.w * 0.15, y: b.y + b.h * 0.15, w: b.w * 0.7, h: b.h * 0.7 };
+    else if (canvasView) { const m = canvasView.middle(); area = { x: m.x - m.w * 0.3, y: m.y - m.h * 0.3, w: m.w * 0.6, h: m.h * 0.6 }; }
+    else { const e = render.extent(project.scene); area = { x: e.x + e.w + 80, y: e.y, w: 600, h: 600 }; }
+    const s = Math.min(area.w / pw, area.h / ph, 0.5);   // (at most half its pixels' size: a phone photo's pixels are small)
+    const w = pw * s, h = ph * s;
+    project.pictures.set(name, bytes);
+    await keepPhoto(name, bytes);
+    const layer = cnpy.topLayer(project.base.doc);
+    step({ t: "photo", id, list: null, photo: { file: name, x: area.x + (area.w - w) / 2, y: area.y + (area.h - h) / 2, w, h, pw, ph, name: "Photo", layer, author: dbx.who() } });
+    project.get = render.pictures(project.base.doc, project.pictures, onPicture);
+    redrawViewers();
+    if (!open && tab !== "canvas") { tab = "canvas"; remember("canopy.tab", tab); show(); }
+}
+
+// A new list: on the canvas clear of everything, to the right of it all and level with the top of the other lists,
+// opened to be named (it can be moved where it belongs on the desktop).
+function newList()
+{
+    const doc = project.base.doc, lists = project.view.lists, e = render.extent(project.scene);
+    const x = e.x + e.w + 80, y = lists.length ? Math.min(...lists.map(l => l.y)) : e.y;
+    const id = cnpy.newId();
+    step({ t: "newlist", list: id, x, y, name: "", layer: cnpy.topLayer(doc), author: dbx.who() });
+    open = { kind: "list", id }; arranging = false; editing = { title: true };
+    show();
+    grow(app.querySelector("#over .sheet-wrap"), null);
+}
 
 // ---- opening ----
 
@@ -339,17 +565,17 @@ async function openPath(path)
         const got = await dbx.read(path);
         const doc = await cnpy.open(got.bytes);
         const waiting = remembered("canopy.steps." + path, null) || [];   // changes made here that never got saved: done again
-        project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, lists: [] };
-        project.lists = cnpy.apply(doc.lists, project.steps);
-        const recent = remembered("canopy.recent", []).filter(r => r !== path);
-        remember("canopy.recent", [path, ...recent].slice(0, 5));
-        page = project.lists.length === 1 ? "list" : "project";
-        listId = project.lists.length === 1 ? project.lists[0].id : null;
+        project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, pictures: new Map() };
+        project.get = render.pictures(doc, project.pictures, onPicture);
+        await photosReady(project);
+        refreshView();
+        remember("canopy.recent", [path, ...remembered("canopy.recent", []).filter(r => r !== path)].slice(0, 5));
+        open = null;
         setState(waiting.length ? "saving" : "saved");
         show();
         if (waiting.length) save();
     }
-    catch (e) { failed(e); }
+    catch (e) { project = null; failed(e); }
 }
 
 async function openLocal(file)
@@ -358,19 +584,19 @@ async function openLocal(file)
     try
     {
         const doc = await cnpy.open(new Uint8Array(await file.arrayBuffer()));
-        project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], lists: doc.lists };
-        page = doc.lists.length === 1 ? "list" : "project";
-        listId = doc.lists.length === 1 ? doc.lists[0].id : null;
+        project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map() };
+        project.get = render.pictures(doc, project.pictures, onPicture);
+        refreshView();
+        open = null;
         show();
     }
-    catch (e) { problem = "Couldn't open " + file.name + ": " + e.message; show(); }
+    catch (e) { project = null; problem = "Couldn't open " + file.name + ": " + e.message; show(); }
 }
 
 async function saveCopy()
 {
-    const bytes = await cnpy.save(project.base.doc, project.lists);
-    const blob = new Blob([bytes], { type: "application/octet-stream" });
-    const name = project.name + ".cnpy";
+    const bytes = await cnpy.save(project.base.doc, project.view, project.pictures);
+    const blob = new Blob([bytes], { type: "application/octet-stream" }), name = project.name + ".cnpy";
     if (navigator.canShare && navigator.canShare({ files: [new File([blob], name)] })) { try { await navigator.share({ files: [new File([blob], name)] }); return; } catch (e) { if (e.name === "AbortError") return; } }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -382,23 +608,29 @@ async function saveCopy()
 function failed(e)
 {
     problem = e instanceof dbx.SignedOut ? "Signed out of Dropbox: sign in again." : e.message || String(e);
-    if (e instanceof dbx.SignedOut) { project = null; page = "files"; }
+    if (e instanceof dbx.SignedOut) project = null;
     show();
 }
 
-// ---- typing in an entry ----
+// ---- typing in an entry, or the list's name ----
 
 // The words typed kept (Enter, "goOn": on to a new entry below). "draw": the page again now; a tap elsewhere that
 // ended the typing draws it itself (it would be lost if the page were drawn again under the finger first).
 function finishTyping(goOn, draw)
 {
-    const ta = app.querySelector("textarea");
+    const ta = app.querySelector("#over textarea, #over input.title-edit");
     if (!ta || !editing) return;
     const words = ta.value.replace(/\s+$/, "");
     const was = editing;
     editing = null;
     let next = null;
-    if (was.fresh)
+    const l = current();
+    if (was.title)
+    {
+        if (l && words !== l.name) step({ t: "name", name: words.replace(/\n/g, " ") });
+        if (goOn && l && l.rows.length === 0) next = { fresh: true, after: null, kind: "T" };   // a new list named: on to its first entry
+    }
+    else if (was.fresh)
     {
         if (words !== "")
         {
@@ -409,7 +641,7 @@ function finishTyping(goOn, draw)
     }
     else
     {
-        const r = current().rows.find(o => o.id === was.id);
+        const r = l && l.rows.find(o => o.id === was.id);
         if (r && r.text !== words) step({ t: "set", id: r.id, fields: { text: words } });
         if (goOn && words !== "") next = { fresh: true, after: was.id, kind: r && r.kind === "N" ? "N" : "T" };   // Enter carries on to the next entry
     }
@@ -422,12 +654,11 @@ function keyDown(e)
     const ta = e.target;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finishTyping(true); return; }
     if (e.key === "Escape") { editing = null; show(); return; }
-    if (e.key === "Backspace" && ta.value === "" && editing)
+    if (e.key === "Backspace" && ta.value === "" && editing && !editing.title)
     {
         // An empty entry backspaced: gone, and the one above it typed in.
         e.preventDefault();
-        const l = current();
-        const was = editing;
+        const l = current(), was = editing;
         editing = null;
         let above = null;
         if (was.fresh) above = was.after;
@@ -448,7 +679,7 @@ function keyDown(e)
 function drag(handle, e)
 {
     const row = handle.closest(".entry"), all = Array.from(document.querySelectorAll("#entries .entry"));
-    const from = all.indexOf(row), box = row.getBoundingClientRect(), h = box.height + 6, y0 = e.clientY;
+    const from = all.indexOf(row), box = row.getBoundingClientRect(), h = box.height + 8, y0 = e.clientY;
     const mids = all.map(o => { const r = o.getBoundingClientRect(); return r.top + r.height / 2; });   // where each entry's middle was
     let to = from;
     row.classList.add("lifted");
@@ -456,7 +687,7 @@ function drag(handle, e)
     const move = ev =>
     {
         const dy = ev.clientY - y0, mid = box.top + box.height / 2 + dy;
-        row.style.transform = "translateY(" + dy + "px)";
+        row.style.transform = "translateY(" + dy + "px) scale(1.02)";
         // It goes where its middle now is among the others' middles.
         to = 0;
         all.forEach((o, i) => { if (o !== row && mids[i] < mid) to++; });
@@ -486,18 +717,172 @@ function drag(handle, e)
     handle.addEventListener("pointercancel", up);
 }
 
+// ---- an entry held down: its menu (what kind it is, its box's colour, a link, delete); swiped left: deleted ----
+
+function touchEntries(root)
+{
+    root.querySelectorAll("#entries .entry").forEach(el =>
+    {
+        if (arranging || !el.dataset.id) return;
+        let timer = null, x0 = 0, y0 = 0, sliding = false, dx = 0, id = null;
+        const stop = () => { if (timer) clearTimeout(timer); timer = null; };
+        el.addEventListener("pointerdown", e =>
+        {
+            if (e.target.closest("textarea, .check, .link")) return;
+            x0 = e.clientX; y0 = e.clientY; sliding = false; dx = 0; id = e.pointerId;
+            timer = setTimeout(() => { timer = null; el.dataset.held = "1"; if (!calm) el.animate([{ transform: "scale(1)" }, { transform: "scale(.97)" }, { transform: "scale(1)" }], { duration: 220 }); entryMenu(el.dataset.id); }, 480);
+        });
+        el.addEventListener("pointermove", e =>
+        {
+            if (e.pointerId !== id) return;
+            const mx = e.clientX - x0, my = e.clientY - y0;
+            if (Math.abs(mx) + Math.abs(my) > 10) stop();
+            if (!sliding && mx < -14 && Math.abs(mx) > Math.abs(my) * 1.5) { sliding = true; el.setPointerCapture(e.pointerId); el.classList.add("swiping"); }
+            if (sliding) { dx = Math.min(0, mx); el.style.transform = "translateX(" + dx + "px)"; el.style.setProperty("--swipe", Math.min(1, -dx / (el.offsetWidth * 0.35))); }
+        });
+        const up = () =>
+        {
+            stop();
+            if (!sliding) return;
+            sliding = false;
+            el.dataset.held = "1";   // (no tap after a swipe)
+            if (-dx > el.offsetWidth * 0.35)
+            {
+                const gone = () => { step({ t: "del", id: el.dataset.id }); show(); };
+                if (calm) return gone();
+                el.animate([{ transform: "translateX(" + dx + "px)", opacity: 1 }, { transform: "translateX(-110%)", opacity: 0 }], { duration: 180, easing: "ease-in" }).onfinish = gone;
+            }
+            else { el.style.transition = "transform .2s cubic-bezier(.2,1.2,.3,1)"; el.style.transform = ""; el.classList.remove("swiping"); setTimeout(() => { el.style.transition = ""; }, 220); }
+        };
+        el.addEventListener("pointerup", up);
+        el.addEventListener("pointercancel", up);
+        el.addEventListener("contextmenu", e => e.preventDefault());
+        el.addEventListener("click", e => { if (el.dataset.held) { e.stopPropagation(); e.preventDefault(); delete el.dataset.held; } }, true);   // (a hold's or swipe's own release is no tap)
+    });
+}
+
+// A sheet up from the bottom, over the list ("html" its inside); taps on its [data-do] parts go to "chose".
+function sheetUp(html, chose)
+{
+    const over = app.querySelector("#over .sheet-wrap");
+    const sheet = element('<div class="picker"><div class="shade" data-do="unpick"></div><div class="panel"><div class="grip"></div>' + html + "</div></div>");
+    over.appendChild(sheet);
+    const close = then => { if (calm) { sheet.remove(); if (then) then(); return; } sheet.querySelector(".shade").animate([{ opacity: 1 }, { opacity: 0 }], { duration: 170 }); sheet.querySelector(".panel").animate([{ transform: "none" }, { transform: "translateY(100%)" }], { duration: 180, easing: "ease-in" }).onfinish = () => { sheet.remove(); if (then) then(); }; };
+    sheet.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", () => { if (b.dataset.do === "unpick") return close(); chose(b.dataset.do, b.dataset.value, close, sheet); }));
+    if (!calm)
+    {
+        sheet.querySelector(".panel").animate([{ transform: "translateY(100%)" }, { transform: "none" }], { duration: 320, easing: "cubic-bezier(.2,1.1,.3,1)" });
+        sheet.querySelector(".shade").animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 });
+    }
+    return sheet;
+}
+function swatches(chosen, colours, does, none)
+{
+    return '<div class="swatches">' + (none ? '<button class="swatch none' + (!chosen ? " on" : "") + '" data-do="' + does + '" data-value="" aria-label="' + none + '"></button>' : "")
+        + colours.map(c => '<button class="swatch' + (chosen && chosen.toUpperCase().slice(-6) === c.toUpperCase().slice(-6) ? " on" : "") + '" data-do="' + does + '" data-value="' + c + '" style="background:' + c + '"></button>').join("") + "</div>";
+}
+const KIT = ["#EF5EB8", "#DAFF00", "#27FF98", "#5EC8EF", "#8E4DFF", "#FF8A3D", "#E04848", "#1F5A8C", "#428C6A", "#6B6F6E"];   // (with the project's own palette first)
+function colours() { const own = project.base.doc.palette.map(c => "#" + c.replace("#", "").slice(-6)); return [...new Set([...own, ...KIT].map(c => c.toUpperCase()))].slice(0, 16); }
+
+function entryMenu(rowId)
+{
+    const r = current().rows.find(o => o.id === rowId);
+    if (!r) return;
+    const kinds = [["T", "Task"], ["N", "Note"], ["H", "Heading"], ["D", "Divider"]];
+    const html = '<div class="ptitle">' + (r.kind === "D" ? "Divider" : text(cnpy.plain(r.text).slice(0, 60)) || "Entry") + "</div>"
+        + '<div class="segments">' + kinds.map(k => '<button class="' + (k[0] === r.kind ? "on" : "") + '" data-do="kind" data-value="' + k[0] + '">' + k[1] + "</button>").join("") + "</div>"
+        + (r.kind === "T" ? '<div class="section">Check box</div>' + swatches(r.color, colours(), "boxcolor", "The list's own") : "")
+        + (r.kind !== "D" ? '<button class="pick" data-do="linkto"><span>' + (r.link ? "Change the link…" : "Link to a board or object…") + "</span>" + icon("link", 18) + "</button>" : "")
+        + (r.link ? '<button class="pick" data-do="unlink"><span>Remove the link</span></button>' : "")
+        + '<button class="pick danger" data-do="delete"><span>Delete</span></button>';
+    sheetUp(html, (does, value, close) =>
+    {
+        if (does === "kind") { const fields = { kind: value }; if (value !== "T") fields.done = false; if (value === "D") { fields.text = ""; fields.link = null; } step({ t: "set", id: rowId, fields }); close(show); }
+        else if (does === "boxcolor") { step({ t: "set", id: rowId, fields: { color: value || null } }); close(show); }
+        else if (does === "unlink") { step({ t: "set", id: rowId, fields: { link: null } }); close(show); }
+        else if (does === "delete") { step({ t: "del", id: rowId }); close(show); }
+        else if (does === "linkto") close(() => pickLink(rowId));
+    });
+}
+
+// What can be linked to: the boards, then the named objects (a group as one, past the layer it is in).
+function linkTargets()
+{
+    const doc = project.base.doc, sc = project.scene;
+    const out = doc.boards.map(b => ({ id: b.id, name: b.name, kind: "Board" }));
+    const groups = new Set();
+    for (let i = sc.items.length - 1; i >= 0; i--)
+    {
+        const o = sc.items[i];
+        if (o.id === (open && open.id)) continue;
+        let g = null;
+        if (o.group) { const ids = o.group.split("/"); const k = doc.folders.has(ids[0]) ? 1 : 0; if (ids.length > k) g = ids.slice(0, k + 1).join("/"); }
+        if (g) { if (groups.has(g)) continue; groups.add(g); out.push({ id: o.id, name: (o.groupName || "").split("\u001f")[g.split("/").length - 1] || "Group", kind: "Group" }); continue; }
+        const kinds = { list: "List", image: "Picture", type: "Type", paint: "Drawing", rect: "Shape", oval: "Shape", path: "Path", line: "Line", arrow: "Arrow" };
+        out.push({ id: o.id, name: o.kind === "list" ? o.name || "List" : o.kind === "type" ? (o.text || "").split("\n")[0].slice(0, 40) : o.name || kinds[o.kind], kind: kinds[o.kind] || "Object" });
+    }
+    return out;
+}
+function pickLink(rowId)
+{
+    const r = current().rows.find(o => o.id === rowId);
+    if (!r) return;
+    const all = linkTargets();
+    const html = '<div class="ptitle">Link “' + text(cnpy.plain(r.text).slice(0, 40)) + '” to…</div><div class="scroll">'
+        + ["Board", null].map(k => { const these = all.filter(t => k ? t.kind === k : t.kind !== "Board"); return these.length ? '<div class="section">' + (k ? "Boards" : "Objects") + "</div>" + these.map(t => '<button class="pick' + (t.id === r.link ? " on" : "") + '" data-do="link" data-value="' + text(t.id) + '"><span>' + text(t.name) + '</span><span class="kind-name">' + t.kind + "</span></button>").join("") : ""; }).join("")
+        + (all.length ? "" : '<div class="empty">Nothing to link to yet</div>') + "</div>";
+    sheetUp(html, (does, value, close) => { if (does === "link") { step({ t: "set", id: rowId, fields: { link: value } }); close(show); } });
+}
+
+// The list's own options: its colour (the stripe made from it), showing what's done, deleting it.
+function listMenu()
+{
+    finishTyping(false, false);
+    const l = current();
+    const html = '<div class="ptitle">' + (text(l.name) || "Untitled list") + "</div>"
+        + '<div class="section">List colour</div>' + swatches(l.fill, colours(), "fill", "The theme's")
+        + '<div class="section">Stripe</div>' + swatches(l.ink, colours(), "ink", null)
+        + '<button class="pick" data-do="done"><span>' + (l.showDone ? "Hide completed" : "Show completed") + "</span></button>"
+        + '<button class="pick danger" data-do="dellist"><span>Delete list</span></button>';
+    sheetUp(html, (does, value, close, sheet) =>
+    {
+        if (does === "fill") { step({ t: "listset", fields: value ? { fill: value, ink: render.bright(value) } : { fill: null } }); close(show); }
+        else if (does === "ink") { step({ t: "listset", fields: { ink: value } }); close(show); }
+        else if (does === "done") { step({ t: "listset", fields: { showDone: !l.showDone } }); close(show); }
+        else if (does === "dellist")
+        {
+            const b = sheet.querySelector('[data-do="dellist"]');
+            if (!b.dataset.sure) { b.dataset.sure = "1"; b.querySelector("span").textContent = "Tap again to delete “" + (l.name || "this list") + "”"; return; }
+            close(() => { step({ t: "dellist" }); open = null; show(); });
+        }
+    });
+}
+
+function follow(id)
+{
+    finishTyping(false, false);
+    const sc = project.scene, to = render.linked(sc, id);
+    if (!to) { problem = "What it linked to isn't in the project any more."; return show(); }
+    if (to.board) { open = { kind: "board", id: to.board.id }; show(); grow(app.querySelector("#over .board-wrap"), null); return; }
+    if (to.item && to.item.kind === "list") { openList(to.item.id, null); return; }
+    open = null; tab = "canvas"; remember("canopy.tab", tab);
+    show();
+    canvasView.fit(to.area, 0.18, true);
+}
+
 // ---- what each button does ----
 
 function wire(root)
 {
-    (root || app).querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", ev => act(b.dataset.do, b.dataset.value, ev)));
-    if (root) return;
-    const picker = app.querySelector("#picker");
+    (root || app).querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", ev => act(b.dataset.do, b.dataset.value, ev, b)));
+    if (root && !root.querySelector("textarea, input.title-edit, select.kind, .handle, #entries, #picker")) return;
+    const scope = root || app;
+    const picker = scope.querySelector("#picker");
     if (picker) picker.addEventListener("change", () => { if (picker.files[0]) openLocal(picker.files[0]); });
-    const ta = app.querySelector("textarea");
+    const ta = scope.querySelector("textarea, input.title-edit");
     if (ta)
     {
-        ta.addEventListener("input", () => grow(ta));
+        if (ta.tagName === "TEXTAREA") ta.addEventListener("input", () => growArea(ta));
         ta.addEventListener("keydown", keyDown);
         ta.addEventListener("blur", () =>
         {
@@ -507,19 +892,19 @@ function wire(root)
             setTimeout(() => { if (draws === drawn) show(); }, 350);   // (nothing else drew the page: drawn now, the words in place)
         });
     }
-    app.querySelectorAll("select.kind").forEach(s => s.addEventListener("change", () =>
+    scope.querySelectorAll("select.kind").forEach(s => s.addEventListener("change", () =>
     {
         const fields = { kind: s.value };
         if (s.value !== "T") fields.done = false;
-        if (s.value === "D") fields.text = "";
+        if (s.value === "D") { fields.text = ""; fields.link = null; }
         step({ t: "set", id: s.dataset.id, fields });
         show();
     }));
-    app.querySelectorAll(".handle").forEach(h => h.addEventListener("pointerdown", e => { e.preventDefault(); drag(h, e); }));
-    if (page !== "list") app.style.background = "";
+    scope.querySelectorAll(".handle").forEach(h => h.addEventListener("pointerdown", e => { e.preventDefault(); drag(h, e); }));
+    if (scope.querySelector("#entries")) touchEntries(scope);
 }
 
-function act(what, value, ev)
+function act(what, value, ev, el)
 {
     switch (what)
     {
@@ -531,50 +916,78 @@ function act(what, value, ev)
         case "into": folder = value; remember("canopy.folder", folder); showFiles(); break;
         case "up": folder = folder.split("/").slice(0, -1).join("/"); remember("canopy.folder", folder); showFiles(); break;
         case "open": openPath(value); break;
-        case "files": editing = null; arranging = false; page = "files"; project = project && project.steps.length && !project.local ? project : null; show(); break;
-        case "project": finishTyping(false); editing = null; arranging = false; page = "project"; show(); break;
-        case "list": listId = value; page = "list"; editing = null; arranging = false; show(); break;
+        case "files":
+            closeViewers();
+            if (project && project.steps.length && !project.local) save();   // (still saving: it carries on)
+            project = null; open = null; problem = ""; show();
+            break;
+        case "tab": if (value === tab && !open) { if (tab === "canvas") fitAll(true); break; } finishTyping(false, false); open = null; tab = value; remember("canopy.tab", tab); show(); break;
+        case "list": openList(value, el); break;
+        case "board": openBoard(value, el); break;
+        case "close": closeOver(); break;
+        case "fitall": fitAll(true); break;
+        case "fitboard": { const b = project.base.doc.boards.find(o => o.id === open.id); if (b && boardView) boardView.fit(b, 0.04, true); break; }
         case "refresh": save(); catchUp(false); break;
         case "copy": saveCopy(); break;
-        case "arrange": finishTyping(false); arranging = !arranging; editing = null; show(); break;
+        case "newlist": newList(); break;
+        case "photo": app.querySelector("#photo-picker").click(); break;
+        case "arrange": finishTyping(false, false); arranging = !arranging; editing = null; show(); break;
+        case "retitle": if (project.base.doc.readOnly || arranging) break; finishTyping(false, false); editing = { title: true }; show(); break;
+        case "follow": follow(value); break;
         case "tick":
         {
             const r = current().rows.find(o => o.id === value);
             if (r) step({ t: "set", id: r.id, fields: { done: !r.done } });
             show();
+            const box = app.querySelector('.entry[data-id="' + CSS.escape(value) + '"] .check span');
+            if (box && !calm) box.animate([{ transform: "scale(.6)" }, { transform: "scale(1.18)" }, { transform: "scale(1)" }], { duration: 260, easing: "cubic-bezier(.2,.9,.3,1.3)" });
             break;
         }
         case "type":
             if (arranging || project.base.doc.readOnly) break;
-            if (ev && ev.target.closest("a")) break;
-            if (editing) finishTyping(false);
+            if (editing) finishTyping(false, false);
             editing = { id: value };
             show();
             break;
         case "add":
         {
-            if (editing) finishTyping(false);
+            if (editing) finishTyping(false, false);
             const l = current(), last = l.rows.length ? l.rows[l.rows.length - 1].id : null;
             if (value === "D") { step({ t: "add", row: { id: cnpy.newId(), kind: "D", done: false, color: null, text: "", link: null }, after: last }); show(); break; }
             editing = { fresh: true, after: last, kind: value };
             show();
             break;
         }
-        case "remove": step({ t: "del", id: value }); show(); break;
-        case "showdone":   // (on this phone only: the list's own setting is the desktop app's)
+        case "remove":
         {
-            const l = current();
-            remember("canopy.done." + l.id, !remembered("canopy.done." + l.id, l.showDone));
-            show();
+            const row = app.querySelector('.entry[data-id="' + CSS.escape(value) + '"]');
+            const gone = () => { step({ t: "del", id: value }); show(); };
+            if (row && !calm) row.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(-24px) scale(.96)" }], { duration: 160, easing: "ease-in" }).onfinish = gone;
+            else gone();
             break;
         }
+        case "showdone": step({ t: "listset", fields: { showDone: !current().showDone } }); show(); break;
+        case "listmenu": listMenu(); break;
     }
 }
 
 // ---- starting ----
 
+// The Dropbox key fetched fresh (a browser may hold on to an older copy of config.js for a while).
+async function freshKey()
+{
+    try
+    {
+        const r = await fetch("config.js", { cache: "no-store" });
+        const m = (await r.text()).match(/dropboxAppKey\s*:\s*"([^"]*)"/);
+        if (m) { window.CANOPY = window.CANOPY || {}; window.CANOPY.dropboxAppKey = m[1]; }
+    }
+    catch (e) { }
+}
+
 (async function start()
 {
+    await freshKey();
     try { await dbx.finish(); }
     catch (e) { problem = e.message; }
     show();

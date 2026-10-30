@@ -1,6 +1,6 @@
 {
-  "name": "Canopy Board",
-  "short_name": "Board",
+  "name": "Canopy Web Viewer",
+  "short_name": "Canopy",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

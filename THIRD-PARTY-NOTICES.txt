@@ -5,3 +5,4 @@ which allow use in commercial software. Their licences are kept beside them.
 
   JSZip                    MIT          reading and writing .cnpy files (zips)        vendor/jszip-LICENSE.md
   IBM Plex Sans            SIL OFL 1.1  the interface typeface                        fonts/IBMPlexSans-OFL.txt
+  Rubik                    SIL OFL 1.1  drawing type set in it, as the desktop app    fonts/Rubik-OFL.txt
