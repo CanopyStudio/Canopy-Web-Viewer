@@ -326,6 +326,7 @@ export async function save(doc, view, pictures)
     const text = write(doc, view);
     doc.zip.file("layers.txt", (doc.bom ? "\uFEFF" : "") + text, { compression: "DEFLATE" });
     for (const p of view.photos) if (!doc.zip.file(p.file) && pictures.has(p.file)) doc.zip.file(p.file, pictures.get(p.file), { compression: "STORE" });
+    for (const r of view.restored) if (r.item.kind === "image" && !doc.zip.file(r.item.file) && pictures.has(r.item.file)) doc.zip.file(r.item.file, pictures.get(r.item.file), { compression: "STORE" });   // (pasted from another project)
     return await doc.zip.generateAsync({ type: "uint8array" });
 }
 
@@ -421,6 +422,58 @@ function keep(doc, view, id)
     if (t) lines[o.line - from] = placedLine(lines[o.line - from], o, t);
     return { id, lines };
 }
+// ---- copied and pasted: objects as "keep" has them (to be brought back by a "restore" step, so undone alike) ----
+
+export function copyOut(doc, view, ids) { return ids.map(id => keep(doc, view, id)).filter(Boolean); }
+// The picture or drawing a copied object's pixels are in (a picture's file, a drawing's folder), or null.
+export function fileOf(th)
+{
+    if (th.photo) return { file: th.photo.file, kind: "image" };
+    const body = th.lines ? th.lines.find(l => l.startsWith("image ") || l.startsWith("paint ")) : null;
+    return body ? { file: body.substring(body.indexOf(" ") + 1).split("|")[0], kind: body.startsWith("image ") ? "image" : "paint" } : null;
+}
+// The copies made new, to go into "doc": each its own id, and new groups for the groups they were in (alike for all of
+// them, so a group copied stays one group); moved by "by"; kept in their layer where "doc" (the file pasted into) has
+// it, else put in "layer" (or in none, with no layers there); "from" is the file they were copied from. None locked.
+export function copyIn(things, from, doc, by, layer)
+{
+    const fresh = new Map(), anew = id => { if (!fresh.has(id)) fresh.set(id, newId()); return fresh.get(id); };
+    const isLayer = (d, id) => d.folders.has(id) || d.empties.some(e => e.id === id);
+    const regroup = (group, groupName) =>
+    {
+        let ids = group ? group.split("/") : [], names = (groupName || "").split(SEP).slice(0, ids.length);
+        while (names.length < ids.length) names.push("");
+        let lay = null;
+        if (ids.length && isLayer(from, ids[0])) { if (isLayer(doc, ids[0])) lay = { id: ids[0], name: names[0] }; ids = ids.slice(1); names = names.slice(1); }
+        lay = lay || layer;
+        ids = ids.map(anew);
+        if (lay) { ids.unshift(lay.id); names.unshift(lay.name); }
+        return { group: ids.length ? ids.join("/") : null, groupName: names.join(SEP), layer: lay };
+    };
+    return things.map(th =>
+    {
+        const id = newId();
+        if (th.list)
+        {
+            // (a new list is written in the group its "layer" names: here, the whole of where it goes)
+            const l = th.list, g = regroup(l.group, l.groupName), at = g.group ? { id: g.group, name: g.groupName } : null;
+            return { id, list: { ...l, id, x: l.x * by.k + by.ox, y: l.y * by.k + by.oy, rows: l.rows.map(r => ({ ...r, id: newId() })), layer: at, group: g.group, groupName: g.groupName, locked: false, fresh: true } };
+        }
+        if (th.photo)
+        {
+            const p = th.photo, lay = regroup(p.layer ? p.layer.id : null, p.layer ? p.layer.name : "").layer;
+            return { id, photo: { ...p, id, x: p.x * by.k + by.ox, y: p.y * by.k + by.oy, w: p.w * by.k, h: p.h * by.k, layer: lay, locked: false } };
+        }
+        const one = parse(["CanopyBoard " + doc.version].concat(th.lines).join("\n")).items[0];
+        if (!one || !th.lines[0].startsWith("meta ")) return null;
+        const lines = th.lines.slice(), body = one.line - 1, m = lines[0].substring(5).split("|"), g = regroup(one.group, one.groupName);
+        m[0] = id; m[1] = g.group || "-"; m[3] = escape(g.groupName); m[5] = (m[5] || "").replace("L", "");
+        lines[0] = "meta " + m.join("|");
+        lines[body] = placedLine(lines[body], one, by);
+        return { id, lines };
+    }).filter(Boolean);
+}
+
 // The steps that undo "s" (in order), or none.
 export function inverse(doc, view, s)
 {

@@ -102,7 +102,23 @@ function applyTheme(name)
 }
 applyTheme(theme);
 
-// ---- feel: a soft click and a tiny buzz as things are done (the sound can be turned off) ----
+// ---- the page kept from scrolling while something is dragged; let go as the dragging ends, and in any case once no
+// finger is on the screen (a drag whose end never came, as a phone can lose it, would otherwise leave it stuck) ----
+
+let fingers = 0;
+const stuck = new Set();   // the ends of drags going on
+document.addEventListener("touchstart", e => { fingers = e.touches.length; }, { capture: true, passive: true });
+const fingersUp = e => { fingers = e.touches.length; if (fingers === 0) for (const end of [...stuck]) end(); };
+document.addEventListener("touchend", fingersUp, true);
+document.addEventListener("touchcancel", fingersUp, true);
+const noScroll = ev => ev.preventDefault();
+function holdScroll(end) { if (stuck.size === 0) document.addEventListener("touchmove", noScroll, { passive: false }); stuck.add(end); }
+// Whether that drag was still going (ended now, the page free to scroll again once no other is).
+function letScroll(end) { if (!stuck.delete(end)) return false; if (stuck.size === 0) document.removeEventListener("touchmove", noScroll); return true; }
+// Whether a hold (begun by "e") still has its finger down: on a touch screen, a finger must still be on it.
+function stillDown(e) { return e.pointerType !== "touch" || fingers > 0; }
+
+// ---- feel: a soft click as things are done (it can be turned off) ----
 
 let sound = remembered("canopy.sound", true);
 let audio = null;
@@ -125,34 +141,14 @@ function click(pitch, soft)
     }
     catch (e) { }
 }
-// A tiny buzz: vibration where the phone has it; on an iPhone (iOS 18 on), the buzz a switch gives as it is flipped,
-// which it only gives during a touch: so a buzz wanted between touches (a hold) waits for the finger's lift.
-let buzzLater = false;
-function buzz(ms, later)
-{
-    try
-    {
-        if (navigator.vibrate) { navigator.vibrate(ms || 8); return; }
-        if (later) { buzzLater = true; return; }
-        const label = document.createElement("label"), input = document.createElement("input");
-        label.ariaHidden = "true"; label.style.display = "none";
-        input.type = "checkbox"; input.setAttribute("switch", "");
-        label.appendChild(input); document.head.appendChild(label);
-        label.click();
-        label.remove();
-    }
-    catch (e) { }
-}
-document.addEventListener("pointerup", () => { if (buzzLater) { buzzLater = false; buzz(); } }, true);
 const feel = {
-    tick() { click(1320); buzz(10); },
-    untick() { click(760, true); buzz(6); },
-    hold() { click(980, true); buzz(12, true); },
-    edge() { click(620, true); buzz(6); },     // a swipe past where it deletes (or back)
-    gone() { click(420); buzz(14); },
-    pick() { click(1100, true); buzz(6); },
-    drop() { click(880, true); buzz(8); },
-    size() { buzz(6); }                         // sized back to as it was
+    tick() { click(1320); },
+    untick() { click(760, true); },
+    hold() { click(980, true); },
+    edge() { click(620, true); },     // a swipe past where it deletes (or back)
+    gone() { click(420); },
+    pick() { click(1100, true); },
+    drop() { click(880, true); }
 };
 
 // ---- small pieces ----
@@ -251,7 +247,7 @@ function arrangePins()
         {
             if (e.target.closest(".pin") || e.button > 0) return;
             x0 = e.clientX; y0 = e.clientY;
-            timer = setTimeout(() => { timer = null; lift(e); }, 420);
+            timer = setTimeout(() => { timer = null; if (stillDown(e)) lift(e); }, 420);
         });
         const stop = () => { if (timer) clearTimeout(timer); timer = null; };
         row.addEventListener("pointermove", e => { if (timer && Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 8) stop(); });
@@ -267,25 +263,24 @@ function arrangePins()
             const mids = all.map(o => { const r = o.getBoundingClientRect(); return r.top + r.height / 2; }), start = e.clientY;
             let to = from;
             row.classList.add("lifted");
-            const noScroll = ev => ev.preventDefault();
-            document.addEventListener("touchmove", noScroll, { passive: false });
             const move = ev =>
             {
                 const dy = ev.clientY - start, mid = mids[from] + dy;
                 row.style.transform = "translateY(" + dy + "px)";
                 let now = 0;
                 all.forEach((o, i) => { if (o !== row && mids[i] < mid) now++; });
-                if (now !== to) { to = now; buzz(4); }
+                to = now;
                 all.forEach((o, i) => { if (o === row) return; o.classList.add("sliding"); o.style.transform = i > from && i <= to ? "translateY(" + -h + "px)" : i < from && i >= to ? "translateY(" + h + "px)" : ""; });
             };
             const drop = () =>
             {
+                if (!letScroll(drop)) return;
                 document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", drop); document.removeEventListener("pointercancel", drop);
-                document.removeEventListener("touchmove", noScroll);
                 const pins = remembered("canopy.pinned", []), path = open.dataset.value;
                 if (to !== from) { const order = pins.filter(p => p !== path); order.splice(to, 0, path); remember("canopy.pinned", order); feel.drop(); }
                 setTimeout(() => { delete row.dataset.held; showFiles(); }, 40);
             };
+            holdScroll(drop);
             document.addEventListener("pointermove", move); document.addEventListener("pointerup", drop); document.addEventListener("pointercancel", drop);
         }
     });
@@ -568,7 +563,7 @@ function arrangeCards(holder, cards)
             if (e.button > 0) return;
             x0 = e.clientX; y0 = e.clientY;
             el.classList.add("pressing");
-            timer = setTimeout(() => { timer = null; el.classList.remove("pressing"); lift(c, e); }, 420);
+            timer = setTimeout(() => { timer = null; el.classList.remove("pressing"); if (stillDown(e) && el.isConnected) lift(c, e); }, 420);
         });
         const stop = () => { if (timer) clearTimeout(timer); timer = null; el.classList.remove("pressing"); };
         el.addEventListener("pointermove", e => { if (timer && Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 8) stop(); });
@@ -589,8 +584,6 @@ function arrangeCards(holder, cards)
         document.body.appendChild(ghost);
         el.classList.add("gap");
         let order = cards.slice(), dx = e.clientX - r.left, dy = e.clientY - r.top, px = e.clientX, py = e.clientY, scroll = 0, settling = 0;
-        const noScroll = ev => ev.preventDefault();
-        document.addEventListener("touchmove", noScroll, { passive: false });
         const place = () =>
         {
             ghost.style.transform = "translate(" + (px - dx - r.left) + "px," + (py - dy - r.top) + "px) scale(1.04) rotate(-1deg)";
@@ -631,8 +624,8 @@ function arrangeCards(holder, cards)
         const move = ev => { px = ev.clientX; py = ev.clientY; place(); };
         const drop = () =>
         {
+            if (!letScroll(drop)) return;
             document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", drop); document.removeEventListener("pointercancel", drop);
-            document.removeEventListener("touchmove", noScroll);
             cancelAnimationFrame(scroll);
             const b = el.getBoundingClientRect();
             const done = () => { ghost.remove(); el.classList.remove("gap"); };
@@ -643,6 +636,7 @@ function arrangeCards(holder, cards)
             setTimeout(() => { delete el.dataset.held; }, 60);
         };
         // (followed from the page, not the card: the card itself moves among the columns as it goes)
+        holdScroll(drop);
         document.addEventListener("pointermove", move); document.addEventListener("pointerup", drop); document.addEventListener("pointercancel", drop);
         place();
     }
@@ -769,6 +763,7 @@ function editable(v)
     v.onTap = (x, y) => tapObject(v, x, y);
     v.overlay = ctx => drawPicked(v, ctx);
     v.grab = at => grabPicked(v, at);
+    tools(v);   // (something copied: ready to paste)
 }
 function pickedBox()
 {
@@ -853,12 +848,11 @@ function grabPicked(v, at)
         // A corner: sized about the opposite one, keeping its shape.
         const c0 = v.toCanvas(h.x, h.y), ax = h.ax, ay = h.ay, d2 = (c0.x - ax) ** 2 + (c0.y - ay) ** 2 || 1;
         project.preview = { t: "place", ids, list: null, by: { k: 1, ox: 0, oy: 0 } };
-        lifted = true; buzz(6);
+        lifted = true;
         return {
             move(now)
             {
-                const p = v.toCanvas(now.x, now.y), k = Math.max(0.05, ((p.x - ax) * (c0.x - ax) + (p.y - ay) * (c0.y - ay)) / d2), was = project.preview.by.k;
-                if ((was - 1) * (k - 1) < 0) feel.size();   // (passing the size it was)
+                const p = v.toCanvas(now.x, now.y), k = Math.max(0.05, ((p.x - ax) * (c0.x - ax) + (p.y - ay) * (c0.y - ay)) / d2);
                 project.preview.by = { k, ox: ax - ax * k, oy: ay - ay * k }; refreshView(); v.redraw();
             },
             end() { settle(v); }
@@ -868,7 +862,7 @@ function grabPicked(v, at)
     if (!b || p.x < b.x - m || p.x > b.x + b.w + m || p.y < b.y - m || p.y > b.y + b.h + m) return null;
     // On it: moved with the finger.
     project.preview = { t: "place", ids, list: null, by: { k: 1, ox: 0, oy: 0 } };
-    lifted = true; buzz(6);
+    lifted = true;
     return {
         move(now, was) { project.preview.by.ox += (now.x - was.x) / v.cam.s; project.preview.by.oy += (now.y - was.y) / v.cam.s; refreshView(); v.redraw(); },
         end() { settle(v); }
@@ -886,16 +880,27 @@ function tools(v)
 {
     const host = v.host.parentNode;
     let bar = host.querySelector(".tools");
-    if (!picked) { if (bar) bar.remove(); return; }
+    const pasting = !picked && clip && !project.base.doc.readOnly;
+    if (!picked && !pasting) { if (bar) bar.remove(); return; }
     if (!bar) { bar = element('<div class="tools"></div>'); host.appendChild(bar); if (!calm) bar.animate([{ transform: "translateY(16px)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 220, easing: "cubic-bezier(.2,1.2,.3,1)" }); }
+    if (pasting)
+    {
+        // Nothing picked, something copied: pasted here, or let go of.
+        bar.innerHTML = '<span class="what">' + (clip.things.length > 1 ? clip.things.length + " copied" : "Copied") + '</span><button data-act="paste">Paste</button><button data-act="unclip">Clear</button>';
+        bar.querySelector('[data-act="paste"]').addEventListener("click", () => paste(v));
+        bar.querySelector('[data-act="unclip"]').addEventListener("click", () => { clip = null; tools(v); });
+        return;
+    }
     const n = picked.ids.length, shut = pickedLocked();
     bar.innerHTML = '<span class="what">' + (shut ? icon("lock", 15) : "") + (picked.list ? "List" : n > 1 ? "Group of " + n : kindName(picked.ids[0])) + "</span>"
         + (picked.list ? '<button data-act="open">Open</button>' : "")
         + '<button data-act="lock">' + (shut ? "Unlock" : "Lock") + "</button>"
+        + '<button data-act="copy">Copy</button>'
         + (shut ? "" : '<button data-act="delete" class="danger">Delete</button>') + '<button data-act="done">Done</button>';
     bar.querySelectorAll("button").forEach(b => b.addEventListener("click", () =>
     {
         if (b.dataset.act === "open") openList(picked.list, null);
+        else if (b.dataset.act === "copy") copyPicked(v);
         else if (b.dataset.act === "delete") { const ids = picked.ids; pick(null, v); step({ t: "delobj", ids, list: null }); feel.gone(); v.redraw(); }
         else if (b.dataset.act === "lock")
         {
@@ -913,6 +918,51 @@ function tools(v)
         else pick(null, v);
     }));
 }
+// ---- copied and pasted on the canvas or a board: what is picked, into this project or another opened after ----
+
+let clip = null;   // { things, path (the project they came from), from (its file), files (pictures' bytes, by name), box, n }
+async function copyPicked(v)
+{
+    if (!picked) return;
+    const doc = project.base.doc, things = cnpy.copyOut(doc, project.view, picked.ids), files = new Map();
+    for (const th of things)
+    {
+        const f = cnpy.fileOf(th);
+        if (!f || f.kind !== "image" || files.has(f.file)) continue;
+        const z = doc.zip.file(f.file), bytes = project.pictures.get(f.file) || (z ? await z.async("uint8array") : null);
+        if (bytes) files.set(f.file, bytes);
+    }
+    clip = { things, path: project.path, from: doc, files, box: pickedBox(), n: 0 };
+    feel.pick();
+    pick(null, v);   // (the bar then says it is copied, and offers to paste)
+}
+function paste(v)
+{
+    if (!clip || !project || project.base.doc.readOnly) return;
+    const doc = project.base.doc, here = clip.path === project.path;
+    // A drawing's pixels are files of their own: pasted only into the project it came from.
+    const things = here ? clip.things : clip.things.filter(th => { const f = cnpy.fileOf(th); return !f || f.kind !== "paint"; });
+    if (things.length < clip.things.length) toast(things.length ? "Drawings only paste into their own project" : "A drawing only pastes into its own project");
+    if (!things.length) return;
+    // Where: just off the original, when it is in view (a little further each time); else in the middle of the view.
+    const m = v.middle(), b = clip.box, cx = b.x + b.w / 2, cy = b.y + b.h / 2, step1 = 24 / v.cam.s;
+    const seen = here && Math.abs(cx - m.x) < m.w / 2 && Math.abs(cy - m.y) < m.h / 2;
+    clip.n = seen ? clip.n + 1 : 0;
+    const by = seen ? { k: 1, ox: step1 * clip.n, oy: step1 * clip.n } : { k: 1, ox: m.x - cx, oy: m.y - cy };
+    const made = cnpy.copyIn(things, clip.from, doc, by, cnpy.topLayer(doc));
+    for (const th of made)
+    {
+        // (pictures from another project: kept on the phone until saved into this one, as photos are)
+        const f = cnpy.fileOf(th);
+        if (f && f.kind === "image" && !doc.zip.file(f.file) && clip.files.has(f.file) && !project.pictures.has(f.file)) { project.pictures.set(f.file, clip.files.get(f.file)); keepPhoto(f.file, clip.files.get(f.file)); }
+    }
+    step({ t: "restore", list: null, things: made });
+    project.get = render.pictures(project.base.doc, project.pictures, onPicture, project.cache);
+    feel.drop();
+    pick({ ids: made.map(th => th.id), list: made.length === 1 && made[0].list ? made[0].id : null }, v);
+    redrawViewers();
+}
+
 function kindName(id)
 {
     const o = project.scene.items.find(x => x.id === id);
@@ -1231,7 +1281,12 @@ async function rebase(p, bytes, rev)
     p.base = { doc: await cnpy.open(bytes), rev };
     p.get = render.pictures(p.base.doc, p.pictures, onPicture, p.cache);
 }
-function onPicture() { redrawViewers(); if (tab === "boards" && project && !open) { clearTimeout(onPicture.t); onPicture.t = setTimeout(drawThumbs, 60); } }
+function onPicture()
+{
+    redrawViewers();
+    if (tab === "boards" && project && !open) { clearTimeout(onPicture.t); onPicture.t = setTimeout(drawThumbs, 60); }
+    if (document.querySelector(".picker canvas.lthumb")) { clearTimeout(onPicture.l); onPicture.l = setTimeout(drawLinkThumbs, 60); }
+}
 
 // A newer version saved elsewhere, read in (only with nothing of ours waiting: that goes through saving).
 async function catchUp(quiet)
@@ -1263,11 +1318,13 @@ const DB = "canopy-photos";
 function store() { return new Promise((ok, no) => { const r = indexedDB.open(DB, 1); r.onupgradeneeded = () => r.result.createObjectStore("photos"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); }
 async function keepPhoto(file, bytes) { try { const db = await store(); db.transaction("photos", "readwrite").objectStore("photos").put(bytes, file); } catch (e) { } }
 async function photoBytes(file) { try { const db = await store(); return await new Promise(ok => { const r = db.transaction("photos").objectStore("photos").get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); }); } catch (e) { return null; } }
-async function photosReady(p) { for (const s of p.steps) if (s.t === "photo" && !p.pictures.has(s.photo.file)) { const b = await photoBytes(s.photo.file); if (b) p.pictures.set(s.photo.file, b); } }
+// The pictures the steps add (photos, and pictures pasted from another project) that the file doesn't have yet.
+function stepPictures(p) { return p.steps.flatMap(s => s.t === "photo" ? [s.photo.file] : s.t === "restore" ? s.things.map(cnpy.fileOf).filter(f => f && f.kind === "image").map(f => f.file) : []).filter(f => !p.base.doc.zip.file(f)); }
+async function photosReady(p) { for (const f of stepPictures(p)) if (!p.pictures.has(f)) { const b = await photoBytes(f); if (b) p.pictures.set(f, b); } }
 function forgetPhotos(p)
 {
     // Saved into the file: no longer kept on the phone.
-    const waiting = new Set(p.steps.filter(s => s.t === "photo").map(s => s.photo.file));
+    const waiting = new Set(stepPictures(p));
     for (const f of [...p.pictures.keys()]) if (!waiting.has(f) && p.base.doc.zip.file(f)) { p.pictures.delete(f); store().then(db => db.transaction("photos", "readwrite").objectStore("photos").delete(f)).catch(() => { }); }
 }
 
@@ -1754,7 +1811,7 @@ function entryMenu(rowId)
 function linkTargets()
 {
     const doc = project.base.doc, sc = project.scene;
-    const out = sc.boards.map(b => ({ id: b.id, name: b.name, kind: "Board" }));
+    const out = sc.boards.map(b => ({ id: b.id, name: b.name, kind: "Board", area: b }));
     const groups = new Set();
     for (let i = sc.items.length - 1; i >= 0; i--)
     {
@@ -1762,9 +1819,9 @@ function linkTargets()
         if (o.id === (open && open.id)) continue;
         let g = null;
         if (o.group) { const ids = o.group.split("/"); const k = doc.folders.has(ids[0]) ? 1 : 0; if (ids.length > k) g = ids.slice(0, k + 1).join("/"); }
-        if (g) { if (groups.has(g)) continue; groups.add(g); out.push({ id: o.id, name: (o.groupName || "").split("\u001f")[g.split("/").length - 1] || "Group", kind: "Group" }); continue; }
+        if (g) { if (groups.has(g)) continue; groups.add(g); out.push({ id: o.id, name: (o.groupName || "").split("\u001f")[g.split("/").length - 1] || "Group", kind: "Group", items: sc.items.filter(x => x.group && (x.group === g || x.group.startsWith(g + "/"))) }); continue; }
         const kinds = { list: "List", image: "Image", type: "Type", paint: "Drawing", rect: "Shape", oval: "Shape", path: "Path", line: "Line", arrow: "Arrow" };
-        out.push({ id: o.id, name: o.kind === "list" ? o.name || "List" : o.kind === "type" ? (o.text || "").split("\n")[0].slice(0, 40) : o.name || kinds[o.kind], kind: kinds[o.kind] || "Object" });
+        out.push({ id: o.id, name: o.kind === "list" ? o.name || "List" : o.kind === "type" ? (o.text || "").split("\n")[0].slice(0, 40) : o.name || kinds[o.kind], kind: kinds[o.kind] || "Object", items: [o] });
     }
     return out;
 }
@@ -1774,9 +1831,36 @@ function pickLink(rowId)
     if (!r) return;
     const all = linkTargets();
     const build = () => '<div class="ptitle">Link “' + text(cnpy.plain(r.text).slice(0, 40)) + '” to…</div><div class="scroll">'
-        + ["Board", null].map(k => { const these = all.filter(t => k ? t.kind === k : t.kind !== "Board"); return these.length ? '<div class="section">' + (k ? "Boards" : "Objects") + "</div>" + these.map(t => '<button class="pick' + (t.id === r.link ? " on" : "") + '" data-do="link" data-value="' + text(t.id) + '"><span>' + text(t.name) + '</span><span class="kind-name">' + t.kind + "</span></button>").join("") : ""; }).join("")
+        + ["Board", null].map(k => { const these = all.filter(t => k ? t.kind === k : t.kind !== "Board"); return these.length ? '<div class="section">' + (k ? "Boards" : "Objects") + "</div>" + these.map(t => '<button class="pick' + (t.id === r.link ? " on" : "") + '" data-do="link" data-value="' + text(t.id) + '"><canvas class="lthumb"></canvas><span class="pname">' + text(t.name) + '</span><span class="kind-name">' + t.kind + "</span></button>").join("") : ""; }).join("")
         + (all.length ? "" : '<div class="empty">Nothing to link to yet</div>') + "</div>";
+    linkShown = all;
     sheetUp(build, (does, value, close) => { if (does === "link") { step({ t: "set", id: rowId, fields: { link: value } }); close(() => { refreshList(); undoable(); }); } });
+    requestAnimationFrame(drawLinkThumbs);
+}
+// Each place a link can go, drawn small beside its name: a board as it is, an object or group on its own.
+let linkShown = [];
+function drawLinkThumbs()
+{
+    if (!project) return;
+    const sc = project.scene, cans = document.querySelectorAll(".picker canvas.lthumb");
+    if (!cans.length) return;
+    const ids = linkShown.map(t => t.id);
+    cans.forEach(c =>
+    {
+        const t = linkShown[ids.indexOf(c.parentElement.dataset.value)];
+        if (!t) return;
+        let area = t.area, shown = sc;
+        if (!area)
+        {
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            for (const o of t.items) { const b = render.outer(o); x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); }
+            if (x0 === Infinity) return;
+            const pad = Math.max(x1 - x0, y1 - y0) * 0.06;
+            area = { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 };
+            shown = { ...sc, items: t.items, boards: [] };
+        }
+        thumbnail(c, shown, area, project.get, project.base.doc.canvas);
+    });
 }
 
 // The list's own options: its color (the stripe made from it), showing what's done, deleting it.
@@ -1834,7 +1918,7 @@ function accountMenu()
     {
         if (does === "onecolumn")
         {
-            oneColumn = !oneColumn; remember("canopy.onecolumn", oneColumn); click(1100, true); buzz(6);
+            oneColumn = !oneColumn; remember("canopy.onecolumn", oneColumn); click(1100, true);
             const b = app.querySelector('.picker [data-do="onecolumn"]');
             if (b) { b.setAttribute("aria-checked", String(oneColumn)); b.querySelector(".switch").classList.toggle("on", oneColumn); }
             return;
@@ -1843,7 +1927,7 @@ function accountMenu()
         if (does === "sound")
         {
             // (flipped where it is, so it slides)
-            sound = !sound; remember("canopy.sound", sound); click(1100, true); buzz(6);
+            sound = !sound; remember("canopy.sound", sound); click(1100, true);
             const b = app.querySelector('.picker [data-do="sound"]');
             if (b) { b.setAttribute("aria-checked", String(sound)); b.querySelector(".switch").classList.toggle("on", sound); }
         }
@@ -1937,7 +2021,7 @@ function act(what, value, ev, el)
             break;
         case "add":
         {
-            click(1050, true); buzz(6);
+            click(1050, true);
             if (editing) finishTyping(false, false);
             const l = current(), last = l.rows.length ? l.rows[l.rows.length - 1].id : null;
             if (value === "D") { step({ t: "add", row: { id: cnpy.newId(), kind: "D", done: false, color: null, text: "", link: null }, after: last }); show(); break; }
@@ -1960,6 +2044,9 @@ document.addEventListener("keydown", e =>
     if (!(e.ctrlKey || e.metaKey) || e.altKey || !project) return;
     if (e.target.closest && e.target.closest("textarea, input")) return;   // (typing: the box's own undo)
     const k = e.key.toLowerCase();
+    const v = picked ? picked.viewer : boardView || canvasView;
+    if (k === "c" && picked) { e.preventDefault(); copyPicked(picked.viewer); return; }
+    if (k === "v" && clip && v && app.contains(v.host)) { e.preventDefault(); paste(v); return; }
     if (k === "z") { e.preventDefault(); undoRedo(e.shiftKey); }
     else if (k === "y") { e.preventDefault(); undoRedo(true); }
 });
@@ -1977,6 +2064,7 @@ if (standalone)
     document.addEventListener("touchstart", e =>
     {
         const t = e.touches[0];
+        edge = null;   // (one left over, whose end never came, would keep the page from scrolling)
         if (e.touches.length !== 1 || sheetOpen() || e.target.closest(".stage")) return;   // (the canvas drags itself)
         const fromLeft = t.clientX < 22, fromRight = t.clientX > innerWidth - 22;
         if (!fromLeft && !fromRight) return;
@@ -1995,12 +2083,11 @@ if (standalone)
             document.body.appendChild(edge.mark);
             edge.mark.style.top = Math.max(60, Math.min(innerHeight - 60, t.clientY)) - 22 + "px";
         }
-        const k = Math.min(1, dx / 90), was = edge.ready;
+        const k = Math.min(1, dx / 90);
         edge.ready = k >= 1;
         edge.mark.style.transform = "translateX(" + (edge.back ? 1 : -1) * (Math.min(dx, 120) * 0.6 - 30) + "px) scale(" + (0.7 + 0.3 * k) + ")";
         edge.mark.style.opacity = String(0.3 + 0.7 * k);
         edge.mark.classList.toggle("ready", edge.ready);
-        if (edge.ready && !was) buzz(6);
     }, { passive: false });
     const lift = () =>
     {
