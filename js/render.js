@@ -81,9 +81,13 @@ function wantFont(family, weight, italic, redraw)
 // steps, so it isn't decoded again for every zoom), and again bigger only when zoomed in further; at most a few at once;
 // and the ones not shown lately let go once they add up to too much. So a board of big photos fits in a phone's memory.
 // "cache": one per project, kept as the file is saved and read again (its pictures don't change).
-const BUDGET = 48e6, STEPS = [256, 512, 1024, 2048, 3072];
+// Two sizes of each picture: a small one (at most SMALL across), for whenever it is shown no bigger than that, from
+// the preview Canopy Board saves in the file, else the copy kept on this phone, else made once from the original;
+// and the original itself (at most BIG across), only when it is looked at closely. So the big originals, slow to
+// decode, are decoded once, not again at each step of a zoom, and not at all on a phone that has seen them before.
+const BUDGET = 48e6, SMALL = 1024, BIG = 3072;
 // What the pictures and drawing are costing, for the measuring readout (?measure on the address).
-export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0 };
+export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0, previews: 0, kept: 0, made: 0 };
 export function cache() { return { seen: new Map(), busy: 0, queue: [], pixels: 0, frame: 0 }; }
 export function forget(c) { if (!c) return; for (const e of c.seen.values()) { if (e.img) e.img.close(); e.img = null; e.closed = true; } c.seen.clear(); c.pixels = 0; c.queue.length = 0; }
 export function pictures(doc, added, redraw, c)
@@ -100,7 +104,7 @@ export function pictures(doc, added, redraw, c)
             if (!bytes) { e.none = true; continue; }
             c.busy++;
             const t0 = performance.now();
-            bytes.then(b => decode(b, job.side)).then(got =>
+            (job.side <= SMALL ? small(job.file, bytes) : bytes.then(b => decode(b, job.side))).then(got =>
             {
                 if (e.closed) { got.img.close(); return; }   // (let go meanwhile)
                 if (e.img) { c.pixels -= e.img.width * e.img.height; e.img.close(); }
@@ -119,12 +123,61 @@ export function pictures(doc, added, redraw, c)
         if (!e) { e = { img: null, k: 1, side: 0, wanted: 0, frame: 0 }; c.seen.set(file, e); }
         if (e.none) return null;
         e.frame = c.frame;
-        const side = want ? STEPS.find(x => x >= want * 1.25) || STEPS[STEPS.length - 1] : 1e9;
+        const side = want ? (want * 1.25 <= SMALL ? SMALL : BIG) : 1e9;
         if (side > e.side && !e.full && side > e.wanted) { e.wanted = side; c.queue.push({ file, side }); next(); }
         return e.img ? e : null;
     }
     get.begin = () => { c.frame++; };   // (a drawing starting: what it asks for is what is on show)
+    // The small one: Board's preview in the file, else this phone's copy, else made from the original (and kept).
+    async function small(file, bytes)
+    {
+        const pre = doc.zip.file("previews/" + file + ".webp"), size = pre ? (await previewSizes(doc)).get(file) : null;
+        if (pre && size) { const img = await createImageBitmap(new Blob([await pre.async("uint8array")], { type: "image/webp" })); stats.previews++; return { img, k: img.width / size.w, full: false, src: size }; }
+        const keptCopy = await kept(file);
+        if (keptCopy) { const img = await createImageBitmap(keptCopy.blob); stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h } }; }
+        const got = await decode(await bytes, SMALL);
+        if (!got.full) { stats.made++; keep(file, got.img, got.src); }
+        return got;
+    }
     return get;
+}
+// The sizes of the originals Board's previews are of ("previews/sizes.txt": a line each, "file width height").
+function previewSizes(doc)
+{
+    if (doc._previewSizes) return doc._previewSizes;
+    const f = doc.zip.file("previews/sizes.txt");
+    doc._previewSizes = (f ? f.async("string") : Promise.resolve("")).then(t =>
+    {
+        const m = new Map();
+        for (const line of t.split("\n")) { const p = line.trim().split(" "); if (p.length === 3) m.set(p[0], { w: +p[1], h: +p[2] }); }
+        return m;
+    });
+    return doc._previewSizes;
+}
+
+// ---- the small copies kept on this phone (its own storage: a picture in a project never changes under its name,
+// so a copy made once stays right) ----
+let store = null;
+function copies() { return store || (store = new Promise((ok, no) => { const r = indexedDB.open("canopy-small", 1); r.onupgradeneeded = () => r.result.createObjectStore("small"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); })); }
+async function kept(file)
+{
+    try { const db = await copies(); return await new Promise(ok => { const r = db.transaction("small").objectStore("small").get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); }); }
+    catch (e) { return null; }
+}
+async function keep(file, img, src)
+{
+    try
+    {
+        const cv = document.createElement("canvas"); cv.width = img.width; cv.height = img.height;
+        cv.getContext("2d").drawImage(img, 0, 0);
+        let blob = await new Promise(ok => cv.toBlob(ok, "image/webp", 0.86));   // (WebP keeps see-through parts; a phone that can't make one makes a PNG)
+        if (!blob) blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
+        cv.width = cv.height = 0;
+        if (!blob) return;
+        const db = await copies();
+        db.transaction("small", "readwrite").objectStore("small").put({ blob, w: src.w, h: src.h }, file);
+    }
+    catch (e) { }
 }
 // Let go of pictures not on show (not drawn the last time the view was drawn), the longest unseen first, until they
 // fit the budget again. (Never one on show, however long the view has stood still.)

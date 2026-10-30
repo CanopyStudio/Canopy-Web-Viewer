@@ -720,6 +720,7 @@ function measure(stage)
             "Pictures: " + seen.filter(e => e.img).length + " held of " + items.filter(o => o.kind === "image").length + " images and " + items.filter(o => o.kind === "paint").length + " drawings",
             "Memory: " + (c ? (c.pixels / 1e6).toFixed(1) : 0) + " of 48 megapixels; widest " + st.widest + " px",
             "Decoded " + st.decoded + " (" + dm.toFixed(0) + " ms each); waiting " + (c ? c.queue.length + c.busy : 0) + "; let go " + st.dropped + "; failed " + st.failed,
+            "Small ones: " + st.previews + " from the file, " + st.kept + " kept on this phone, " + st.made + " made now",
             "Zoom " + (v ? (v.cam.s * 100).toFixed(0) : "?") + "%, screen " + (v ? v.w + " \u00d7 " + v.h + " at " + v.dpr + "x" : "?") + (navigator.deviceMemory ? ", " + navigator.deviceMemory + " GB" : "")
         ].join("\n");
         setTimeout(tick, 500);
@@ -2024,6 +2025,7 @@ async function freshKey()
 }
 
 if (location.hostname === "localhost") window.__project = () => project;   // (for checking it on this computer)
+if (location.hostname === "localhost") window.__stats = () => render.stats;
 
 (async function start()
 {
