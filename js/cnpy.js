@@ -96,7 +96,7 @@ function readBody(key, rest, meta, ver)
     {
         const p = rest.split("|");
         const d = ver >= 7 ? p.slice(13).join("|") : p.slice(12).join("|");
-        Object.assign(o, { kind: "path", x: num(p[0]), y: num(p[1]), w: num(p[2]), h: num(p[3]), bx: num(p[4]), by: num(p[5]), bw: num(p[6]), bh: num(p[7]), fill: col(p[8]), stroke: col(p[9]), width: num(p[10]), name: unescape(p[11] || ""), d });
+        Object.assign(o, { kind: "path", x: num(p[0]), y: num(p[1]), w: num(p[2]), h: num(p[3]), bx: num(p[4]), by: num(p[5]), bw: num(p[6]), bh: num(p[7]), fill: col(p[8]), stroke: col(p[9]), width: num(p[10]), name: unescape(p[11] || ""), d, dynamic: ver >= 7 && p[12] && p[12] !== "-" ? p[12] : null });
         if (!isFinite(o.x) || o.w <= 0) { o.x = o.bx; o.y = o.by; o.w = o.bw; o.h = o.bh; }
     }
     else if (key === "paint")
@@ -141,7 +141,7 @@ export function parse(text)
         else if (key === "board")
         {
             const f = rest.split("|");
-            boards.push({ id: f[0], x: num(f[1]), y: num(f[2]), w: num(f[3]), h: num(f[4]), name: unescape(f[5] || "Board") });
+            boards.push({ id: f[0], x: num(f[1]), y: num(f[2]), w: num(f[3]), h: num(f[4]), name: unescape(f[5] || "Board"), line: i });
             doc.lastBoardLine = i;
         }
         else if (key === "meta") { meta = readMeta(rest); metaAt = i; continue; }
@@ -251,13 +251,15 @@ export function write(doc, view)
             lines[o.line] = "list " + f.join("|");
         }
     }
-    if (view.unlocked.size && doc.locksLine >= 0)
+    if (view.unlocked.size || view.relocked.size)
     {
-        // Groups and layers unlocked here: out of the "locks" line (the line gone when none are left).
-        const left = [...doc.locks].filter(id => !view.unlocked.has(id));
-        lines[doc.locksLine] = left.length ? "locks " + left.sort().join(" ") : "";
-        if (!left.length) cuts.push({ from: doc.locksLine, to: doc.locksLine + 1, put: [] });
+        // Groups and layers unlocked here (out of the "locks" line), or locked again (back in it); the line gone when
+        // none are left, and made when there was none.
+        const left = [...new Set([...doc.locks].filter(id => !view.unlocked.has(id)).concat([...view.relocked]))].sort();
+        if (doc.locksLine >= 0) cuts.push({ from: doc.locksLine, to: doc.locksLine + 1, put: left.length ? ["locks " + left.join(" ")] : [] });
+        else if (left.length) { const at = doc.boardsLine >= 0 ? doc.boardsLine : 1; cuts.push({ from: at, to: at, put: ["locks " + left.join(" ")] }); }
     }
+    for (const b of doc.boards) if (view.goneBoards.has(b.id)) cuts.push({ from: b.line, to: b.line + 1, put: [] });
     if (view.boards.length)
     {
         const at = doc.lastBoardLine >= 0 ? doc.lastBoardLine + 1 : doc.boardsLine >= 0 ? doc.boardsLine + 1 : 1;
@@ -273,6 +275,7 @@ export function write(doc, view)
         added.push(metaLine(l.id, l.layer, l.author, l.locked), "list " + [n(l.x), n(l.y), n(l.w), n(l.scale || 1), l.ink || "#DAFF00", l.showDone ? 1 : 0, escape(l.name)].concat(l.fill ? [l.fill] : []).join("|"), ...l.rows.map(rowLine));
     for (const p of view.photos)
         added.push(metaLine(p.id, p.layer, p.author, p.locked), "image " + [p.file, n(p.x), n(p.y), n(p.w), n(p.h), 0, 0, p.pw, p.ph, escape(p.name)].join("|"));
+    for (const r of view.restored) added.push(...(r.by ? r.lines.map((l, i) => i === r.body ? placedLine(l, r.item, r.by) : l) : r.lines));   // (deleted, saved, and then brought back)
     lines.splice(tail, 0, ...added);
     return lines.join("\n");
 }
@@ -322,6 +325,7 @@ export function apply(doc, steps)
 {
     const lists = doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) }));
     const photos = [], deleted = new Set(), removed = new Set(), moved = new Map(), boards = [], locks = new Map(), unlocked = new Set();
+    const relocked = new Set(), goneBoards = new Set(), restored = [];
     const items = new Map(doc.items.map(o => [o.id, o]));
     const ids = new Set(doc.items.map(o => o.id));   // (already in the file: a save that went through, its answer lost)
     // Where an entry goes: after the one named, at the top for none (null), at the end if that one has gone.
@@ -333,9 +337,10 @@ export function apply(doc, steps)
             // Objects moved and sized (a shift, then a scale about a point), or deleted: whichever kind, wherever made.
             for (const id of s.ids)
             {
-                const l = lists.find(o => o.id === id), p = photos.find(o => o.id === id);
-                if (s.t === "delobj") { if (l) { lists.splice(lists.indexOf(l), 1); if (!l.fresh) deleted.add(id); } else if (p) photos.splice(photos.indexOf(p), 1); else if (items.has(id)) removed.add(id); continue; }
+                const l = lists.find(o => o.id === id), p = photos.find(o => o.id === id), r = restored.find(o => o.id === id);
+                if (s.t === "delobj") { if (l) { lists.splice(lists.indexOf(l), 1); if (!l.fresh) deleted.add(id); } else if (p) photos.splice(photos.indexOf(p), 1); else if (r) restored.splice(restored.indexOf(r), 1); else if (items.has(id)) removed.add(id); continue; }
                 if (l) Object.assign(l, placed(l, s.by));
+                else if (r) r.by = r.by ? compose(r.by, s.by) : s.by;
                 else if (p) { const q = placed({ ...p, kind: "image" }, s.by); Object.assign(p, { x: q.x, y: q.y, w: q.w, h: q.h }); }
                 else if (items.has(id)) moved.set(id, moved.has(id) ? compose(moved.get(id), s.by) : s.by);
             }
@@ -344,10 +349,29 @@ export function apply(doc, steps)
         if (s.t === "lock")
         {
             for (const id of s.ids) { const l = lists.find(o => o.id === id && o.fresh), p = photos.find(o => o.id === id); if (l) l.locked = s.on; else if (p) p.locked = s.on; else locks.set(id, s.on); }
-            for (const g of s.groups || []) unlocked.add(g);
+            for (const g of s.groups || []) { unlocked.add(g); relocked.delete(g); }
+            for (const g of s.relock || []) { if (unlocked.has(g)) unlocked.delete(g); else relocked.add(g); }
             continue;
         }
-        if (s.t === "newboard") { if (!doc.boards.some(b => b.id === s.board.id)) boards.push({ ...s.board }); continue; }
+        if (s.t === "newboard") { if (goneBoards.has(s.board.id)) goneBoards.delete(s.board.id); else if (!doc.boards.some(b => b.id === s.board.id) && !boards.some(b => b.id === s.board.id)) boards.push({ ...s.board }); continue; }
+        if (s.t === "delboard") { const k = boards.findIndex(b => b.id === s.id); if (k >= 0) boards.splice(k, 1); else if (doc.boards.some(b => b.id === s.id)) goneBoards.add(s.id); continue; }
+        if (s.t === "restore")
+        {
+            // Deleted objects brought back (as they were when deleted): taken off what was deleted, or, gone from the
+            // file since, added again.
+            for (const th of s.things)
+            {
+                const id = th.id;
+                if (lists.some(o => o.id === id) || photos.some(o => o.id === id) || restored.some(o => o.id === id)) continue;
+                if (removed.has(id)) removed.delete(id);
+                else if (th.list && deleted.has(id)) { deleted.delete(id); lists.push({ ...th.list, rows: th.list.rows.map(r => ({ ...r })), fresh: false }); }
+                else if (ids.has(id)) continue;
+                else if (th.list) lists.push({ ...th.list, rows: th.list.rows.map(r => ({ ...r })), fresh: true });
+                else if (th.photo) photos.push({ ...th.photo });
+                else if (th.lines) { const one = parse(["CanopyBoard " + doc.version].concat(th.lines).join("\n")).items[0]; if (one) restored.push({ id, lines: th.lines, body: one.line - 1, item: { ...one, id }, by: null }); }
+            }
+            continue;
+        }
         if (s.t === "newlist") { if (!ids.has(s.list)) lists.push({ id: s.list, kind: "list", fresh: true, x: s.x, y: s.y, w: 340, scale: 1, ink: "#DAFF00", fill: null, showDone: true, name: s.name, rows: [], layer: s.layer, author: s.author, group: s.layer ? s.layer.id : null, groupName: s.layer ? s.layer.name : "" }); continue; }
         if (s.t === "photo") { if (!ids.has(s.id)) photos.push({ ...s.photo, id: s.id }); continue; }
         const l = lists.find(o => o.id === s.list);
@@ -361,7 +385,62 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored };
+}
+
+// ---- undoing: what a step would be undone by, worked out from the project as it is before the step ----
+
+// An object as it is now, kept to be brought back if it is deleted (a list or photo as it is; the file's own lines for
+// anything else, moved as it has been).
+function keep(doc, view, id)
+{
+    const l = view.lists.find(o => o.id === id);
+    if (l) return { id, list: { ...l, rows: l.rows.map(r => ({ ...r })) } };
+    const p = view.photos.find(o => o.id === id);
+    if (p) return { id, photo: { ...p } };
+    const r = view.restored.find(o => o.id === id);
+    if (r) return { id, lines: r.by ? r.lines.map((x, i) => i === r.body ? placedLine(x, r.item, r.by) : x) : r.lines.slice() };
+    const o = doc.items.find(x => x.id === id);
+    if (!o) return null;
+    const from = o.metaLine >= 0 ? o.metaLine : o.line, lines = doc.lines.slice(from, o.lastLine + 1);
+    const t = view.moved.get(id);
+    if (t) lines[o.line - from] = placedLine(lines[o.line - from], o, t);
+    return { id, lines };
+}
+// The steps that undo "s" (in order), or none.
+export function inverse(doc, view, s)
+{
+    const list = s.list, l = list ? view.lists.find(o => o.id === list) : null;
+    const old = (from, fields) => Object.fromEntries(Object.keys(fields).map(k => [k, from[k] === undefined ? null : from[k]]));
+    switch (s.t)
+    {
+        case "set": { const r = l && l.rows.find(o => o.id === s.id); return r ? [{ t: "set", list, id: s.id, fields: old(r, s.fields) }] : []; }
+        case "add": return [{ t: "del", list, id: s.row.id }];
+        case "del": { const k = l ? l.rows.findIndex(o => o.id === s.id) : -1; return k < 0 ? [] : [{ t: "add", list, row: { ...l.rows[k] }, after: k > 0 ? l.rows[k - 1].id : null }]; }
+        case "move": { const k = l ? l.rows.findIndex(o => o.id === s.id) : -1; return k < 0 ? [] : [{ t: "move", list, id: s.id, after: k > 0 ? l.rows[k - 1].id : null }]; }
+        case "name": return l ? [{ t: "name", list, name: l.name }] : [];
+        case "listset": return l ? [{ t: "listset", list, fields: old(l, s.fields) }] : [];
+        case "newlist": return [{ t: "delobj", list: null, ids: [s.list] }];
+        case "dellist": { const th = keep(doc, view, list); return th ? [{ t: "restore", list: null, things: [th] }] : []; }
+        case "photo": return [{ t: "delobj", list: null, ids: [s.id] }];
+        case "delobj": { const things = s.ids.map(id => keep(doc, view, id)).filter(Boolean); return things.length ? [{ t: "restore", list: null, things }] : []; }
+        case "restore": return [{ t: "delobj", list: null, ids: s.things.map(th => th.id) }];
+        case "place": return [{ t: "place", list: null, ids: s.ids, by: { k: 1 / s.by.k, ox: -s.by.ox / s.by.k, oy: -s.by.oy / s.by.k } }];
+        case "newboard": return [{ t: "delboard", list: null, id: s.board.id }];
+        case "delboard": { const b = doc.boards.concat(view.boards).find(o => o.id === s.id); return b ? [{ t: "newboard", list: null, board: { id: b.id, x: b.x, y: b.y, w: b.w, h: b.h, name: b.name } }] : []; }
+        case "lock":
+        {
+            // Each back as it was (locked or not), and the groups unlocked with it locked again (or the other way).
+            const was = id => { const a = view.lists.find(o => o.id === id && o.fresh) || view.photos.find(o => o.id === id); if (a) return !!a.locked; if (view.locks.has(id)) return view.locks.get(id); const o = doc.items.find(x => x.id === id); return !!(o && o.locked); };
+            const on = s.ids.filter(was), off = s.ids.filter(id => !was(id)), out = [];
+            if (on.length) out.push({ t: "lock", list: null, ids: on, on: true });
+            if (off.length) out.push({ t: "lock", list: null, ids: off, on: false });
+            if (!out.length) out.push({ t: "lock", list: null, ids: [], on: false });
+            out[0].relock = s.groups || []; out[0].groups = s.relock || [];
+            return out;
+        }
+    }
+    return [];
 }
 
 // An entry's words with the marks the desktop app reads (**bold**, *italic*) as safe HTML.

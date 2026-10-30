@@ -20,9 +20,63 @@ let arranging = false;    // a list's Edit mode: handles, delete and kinds
 let editing = null;       // the entry being typed in: { id } or, for a new one, { fresh: true, after, kind }; or { title: true }
 let problem = "";         // what went wrong, shown until the next one
 let canvasView = null, boardView = null;   // the viewers on show
+let undos = [], redos = [];   // what undoes each change (steps), latest last; and what redoes each one undone
+let back = [], ahead = [];    // folders gone back from and into, for the arrows
 
 function remembered(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
 function remember(key, v) { try { if (v === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch (e) { } }
+
+// ---- feel: a soft click and a tiny buzz as things are done (the sound can be turned off) ----
+
+let sound = remembered("canopy.sound", true);
+let audio = null;
+function click(pitch, soft)
+{
+    if (!sound) return;
+    try
+    {
+        audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+        if (audio.state === "suspended") audio.resume();
+        const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+        o.type = "triangle";
+        o.frequency.setValueAtTime(pitch, t);
+        o.frequency.exponentialRampToValueAtTime(pitch * 0.55, t + 0.05);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(soft ? 0.06 : 0.14, t + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+        o.connect(g).connect(audio.destination);
+        o.start(t); o.stop(t + 0.08);
+    }
+    catch (e) { }
+}
+// A tiny buzz: vibration where the phone has it; on an iPhone, the buzz a switch gives as it is flipped.
+let buzzer = null;
+function buzz(ms)
+{
+    try
+    {
+        if (navigator.vibrate) { navigator.vibrate(ms || 8); return; }
+        if (!buzzer)
+        {
+            buzzer = document.createElement("label");
+            buzzer.style.cssText = "position:fixed;left:-100px;top:0;opacity:0;pointer-events:none";
+            buzzer.innerHTML = '<input type="checkbox" switch>';
+            document.body.appendChild(buzzer);
+        }
+        buzzer.click();
+    }
+    catch (e) { }
+}
+const feel = {
+    tick() { click(1320); buzz(10); },
+    untick() { click(760, true); buzz(6); },
+    hold() { click(980, true); buzz(12); },
+    edge() { click(620, true); buzz(6); },     // a swipe past where it deletes (or back)
+    gone() { click(420); buzz(14); },
+    pick() { click(1100, true); buzz(6); },
+    drop() { click(880, true); buzz(8); },
+    size() { buzz(6); }                         // sized back to as it was
+};
 
 // ---- small pieces ----
 
@@ -43,13 +97,18 @@ const icons = {
     canvas: '<path d="M4 4h16v16H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 9h16M4 15h16M9 4v16M15 4v16" stroke="currentColor" stroke-width="1" opacity=".6"/>',
     fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     lock: '<rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/>',
+    undo: '<path d="M9 7L4.5 11.5 9 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 11.5h9.5a5 5 0 0 1 0 10H12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    redo: '<path d="M15 7l4.5 4.5L15 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 11.5H9.5a5 5 0 0 0 0 10H12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    forward: '<path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
     pin: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3zM12 14v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
 };
 function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
 function text(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function bar(title, left, right, cls) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + text(title) + "</h1>" + (right || "") + "</header>"; }
 function fileName(path) { return path.split("/").pop().replace(/\.cnpy$/i, ""); }
-function iconButton(does, name, label, value) { return '<button class="icon" data-do="' + does + '"' + (value ? ' data-value="' + text(value) + '"' : "") + ' aria-label="' + label + '">' + icon(name) + "</button>"; }
+function iconButton(does, name, label, value, off) { return '<button class="icon" data-do="' + does + '"' + (value ? ' data-value="' + text(value) + '"' : "") + (off ? " disabled" : "") + ' aria-label="' + label + '" title="' + label + '">' + icon(name) + "</button>"; }
+// Undo and redo, for a bar.
+function undoButtons() { return !project || project.base.doc.readOnly ? "" : iconButton("undo", "undo", "Undo", "", !undos.length) + iconButton("redo", "redo", "Redo", "", !redos.length); }
 
 // ---- the files ----
 
@@ -79,7 +138,8 @@ async function showFiles()
     }
     const pins = remembered("canopy.pinned", []);
     const recent = remembered("canopy.recent", []).filter(r => !pins.includes(r));
-    app.innerHTML = bar("Canopy Web Viewer", "", iconButton("account", "more", "Account"))
+    const arrows = iconButton("back", "back", "Back", "", !back.length && folder === "") + iconButton("ahead", "forward", "Forward", "", !ahead.length);
+    app.innerHTML = bar("Canopy Web Viewer", "", arrows + iconButton("account", "more", "Account"), "files-bar")
         + '<main class="page enter">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
         + (pins.length && folder === "" ? '<div class="section">Pinned</div><div class="rows">' + pins.map(r => item("file", fileName(r), r.split("/").slice(0, -1).join("/") || "Dropbox", "open", r)).join("") + "</div>" : "")
@@ -87,15 +147,14 @@ async function showFiles()
         + '<div class="section">' + (folder === "" ? "Dropbox" : text(folder.split("/").pop())) + '</div>'
         + (folder !== "" ? '<div class="where">' + text(folder) + "</div>" : "")
         + '<div class="rows" id="items"><div class="empty">Loading…</div></div>'
-        + localOpener() + "</main>";
+        + '<input class="hidden-input" type="file" id="picker"></main>';
     wire();
     let items;
     try { items = await dbx.list(folder); }
     catch (e) { return failed(e); }
     const holder = document.getElementById("items");
     if (!holder || project) return;
-    holder.innerHTML = (folder !== "" ? item("up", "Up one folder", "", "up", "") : "")
-        + items.map(i => item(i.folder ? "folder" : "file", i.folder ? i.name : fileName(i.name), i.folder ? "" : when(i.modified), i.folder ? "into" : "open", i.path)).join("")
+    holder.innerHTML = items.map(i => item(i.folder ? "folder" : "file", i.folder ? i.name : fileName(i.name), i.folder ? "" : when(i.modified), i.folder ? "into" : "open", i.path)).join("")
         + (items.length === 0 ? '<div class="empty">No folders or projects here</div>' : "")
         + '<button class="item new" data-do="newproject">' + icon("plus") + '<span class="label"><div class="name">New project in this folder</div></span></button>';
     wire(holder);
@@ -136,7 +195,7 @@ function showProject()
     }
     shell.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.value === tab));
     const head = shell.querySelector("#head");
-    head.innerHTML = bar(project.name, iconButton("files", "back", "Back"), statusHtml() + (tab === "canvas" ? iconButton("fitall", "fit", "Fit everything") : "") + add);
+    head.innerHTML = bar(project.name, iconButton("files", "back", "Back"), statusHtml() + undoButtons() + (tab === "canvas" ? iconButton("fitall", "fit", "Fit everything") : "") + add);
     wire(head);
     const holder = shell.querySelector("#tab");
     const fresh = shell.dataset.tab !== tab;
@@ -151,11 +210,12 @@ function showProject()
 // Two columns, each card going into the shorter one (so they sit together however tall they are).
 function masonry(holder, cards)
 {
-    holder.innerHTML = '<div class="masonry"><div class="col"></div><div class="col"></div></div>';
-    const cols = holder.querySelectorAll(".col"), heights = [0, 0];
+    const wide = Math.min(holder.clientWidth || innerWidth, 1100), n = wide >= 1000 ? 4 : wide >= 720 ? 3 : 2;   // (more columns on a wider screen)
+    holder.innerHTML = '<div class="masonry">' + '<div class="col"></div>'.repeat(n) + "</div>";
+    const cols = holder.querySelectorAll(".col"), heights = new Array(n).fill(0);
     for (const c of cards)
     {
-        const k = heights[0] <= heights[1] ? 0 : 1;
+        const k = heights.indexOf(Math.min(...heights));
         cols[k].appendChild(c.el);
         heights[k] += c.weight + 1;
     }
@@ -177,7 +237,7 @@ function listCard(l)
 {
     const c = render.listLook(l), rows = visible(l), shown = rows.slice(0, 4);
     return '<button class="lcard" data-do="list" data-value="' + text(l.id) + '" style="background:' + c.card + ";color:" + c.onCard + '">'
-        + '<div class="stripe" style="background:' + c.stripe + '"></div><div class="title">' + text(l.name || "List") + "</div>"
+        + '<div class="band" style="background:' + c.stripe + '"></div><div class="title">' + text(l.name || "List") + "</div>"
         + shown.map(r => r.kind === "D" ? '<div class="d" style="background:' + render.shade(c.tile, 0.14) + '"></div>'
             : '<div class="e ' + r.kind + (r.done ? " done" : "") + '" style="' + (r.kind === "H" ? "" : "background:" + c.tile + ";color:" + c.ink) + '">'
                 + (r.kind === "T" ? '<span class="box" style="border-color:' + (r.color || c.box) + (r.done ? ";background:" + (r.color || c.box) : "") + '"></span>' : "")
@@ -229,6 +289,7 @@ function fitAll(glide) { if (canvasView) canvasView.fit(render.extent(project.sc
 // ---- objects picked on the canvas (or in a board): moved by dragging, sized by a corner, deleted ----
 
 let picked = null;   // { ids, list (a list picked on its own: it can be opened), viewer }
+let lifted = false;  // what is picked being moved or sized by a finger (drawn lifted)
 
 function editable(v)
 {
@@ -259,7 +320,9 @@ function tapObject(v, x, y)
     const locked = project.base.doc.readOnly;
     if (o && o.kind === "list" && (locked || (picked && picked.list === o.id))) return openList(o.id, null);   // (a list picked already: opened)
     if (!o || locked) { pick(null, v); return; }
+    const was = picked && picked.ids.join();
     pick({ ids: family(o), list: o.kind === "list" && family(o).length === 1 ? o.id : null }, v);   // (a locked one too: to be unlocked)
+    if (picked.ids.join() !== was) feel.pick();
 }
 function pick(p, v)
 {
@@ -281,13 +344,19 @@ function drawPicked(v, ctx)
     const b = pickedBox();
     if (!b) return;
     const a = v.toScreen(b.x, b.y), c = v.toScreen(b.x + b.w, b.y + b.h);
+    if (lifted)
+    {
+        ctx.save(); ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+        ctx.strokeStyle = "rgba(95,211,155,.6)"; ctx.lineWidth = 3; ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
+        ctx.restore();
+    }
     ctx.strokeStyle = pickedLocked() ? "#A5A8A7" : "#5fd39b"; ctx.lineWidth = 1.5;
     ctx.setLineDash(pickedLocked() ? [5, 4] : []);
     ctx.strokeRect(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5, Math.round(c.x - a.x), Math.round(c.y - a.y));
     if (pickedLocked()) return;   // (locked: no handles)
     for (const h of corners(v))
     {
-        ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(h.x, h.y, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(h.x, h.y, lifted ? 9 : 7, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = "#428C6A"; ctx.lineWidth = 2; ctx.stroke();
     }
 }
@@ -309,8 +378,14 @@ function grabPicked(v, at)
         // A corner: sized about the opposite one, keeping its shape.
         const c0 = v.toCanvas(h.x, h.y), ax = h.ax, ay = h.ay, d2 = (c0.x - ax) ** 2 + (c0.y - ay) ** 2 || 1;
         project.preview = { t: "place", ids, list: null, by: { k: 1, ox: 0, oy: 0 } };
+        lifted = true; buzz(6);
         return {
-            move(now) { const p = v.toCanvas(now.x, now.y), k = Math.max(0.05, ((p.x - ax) * (c0.x - ax) + (p.y - ay) * (c0.y - ay)) / d2); project.preview.by = { k, ox: ax - ax * k, oy: ay - ay * k }; refreshView(); v.redraw(); },
+            move(now)
+            {
+                const p = v.toCanvas(now.x, now.y), k = Math.max(0.05, ((p.x - ax) * (c0.x - ax) + (p.y - ay) * (c0.y - ay)) / d2), was = project.preview.by.k;
+                if ((was - 1) * (k - 1) < 0) feel.size();   // (passing the size it was)
+                project.preview.by = { k, ox: ax - ax * k, oy: ay - ay * k }; refreshView(); v.redraw();
+            },
             end() { settle(v); }
         };
     }
@@ -318,6 +393,7 @@ function grabPicked(v, at)
     if (!b || p.x < b.x - m || p.x > b.x + b.w + m || p.y < b.y - m || p.y > b.y + b.h + m) return null;
     // On it: moved with the finger.
     project.preview = { t: "place", ids, list: null, by: { k: 1, ox: 0, oy: 0 } };
+    lifted = true; buzz(6);
     return {
         move(now, was) { project.preview.by.ox += (now.x - was.x) / v.cam.s; project.preview.by.oy += (now.y - was.y) / v.cam.s; refreshView(); v.redraw(); },
         end() { settle(v); }
@@ -326,8 +402,8 @@ function grabPicked(v, at)
 function settle(v)
 {
     const s = project.preview;
-    project.preview = null;
-    if (s && (s.by.k !== 1 || Math.abs(s.by.ox) > 0.01 || Math.abs(s.by.oy) > 0.01)) step(s); else refreshView();
+    project.preview = null; lifted = false;
+    if (s && (s.by.k !== 1 || Math.abs(s.by.ox) > 0.01 || Math.abs(s.by.oy) > 0.01)) { step(s); feel.drop(); } else refreshView();
     v.redraw();
 }
 // The bar of what can be done to what is picked, along the bottom of the canvas.
@@ -345,7 +421,7 @@ function tools(v)
     bar.querySelectorAll("button").forEach(b => b.addEventListener("click", () =>
     {
         if (b.dataset.act === "open") openList(picked.list, null);
-        else if (b.dataset.act === "delete") { const ids = picked.ids; pick(null, v); step({ t: "delobj", ids, list: null }); v.redraw(); }
+        else if (b.dataset.act === "delete") { const ids = picked.ids; pick(null, v); step({ t: "delobj", ids, list: null }); feel.gone(); v.redraw(); }
         else if (b.dataset.act === "lock")
         {
             // Locking: each its own lock. Unlocking: each its own, and the groups or layers locking it (as the desktop's Unlock).
@@ -357,7 +433,7 @@ function tools(v)
                 step({ t: "lock", ids: picked.ids, on: false, groups, list: null });
                 if (groups.some(g => doc.folders.has(g))) toast("Its whole layer is unlocked too");
             }
-            tools(v); v.redraw();
+            feel.pick(); tools(v); v.redraw();
         }
         else pick(null, v);
     }));
@@ -393,7 +469,8 @@ function showOver()
     if (!over) return;
     if (!open) { if (picked && picked.viewer === boardView) picked = null; over.innerHTML = ""; over.className = ""; boardView = null; return; }
     if (open.kind === "list" && !current()) { open = null; return showOver(); }
-    over.className = "open";
+    over.className = "open " + open.kind;
+    over.onclick = e => { if (e.target === over) closeOver(); };   // (round a list opened on a wide screen: back to the others)
     if (open.kind === "list") showList(over);
     else showBoard(over);
 }
@@ -405,7 +482,7 @@ function grow(el, from)
     const sx = from.width / to.width, sy = from.height / to.height;
     el.animate([
         { transformOrigin: "0 0", transform: "translate(" + (from.left - to.left) + "px," + (from.top - to.top) + "px) scale(" + sx + "," + sy + ")", borderRadius: "14px", opacity: 0.6 },
-        { transformOrigin: "0 0", transform: "none", borderRadius: "0px", opacity: 1 }
+        { transformOrigin: "0 0", transform: "none", borderRadius: getComputedStyle(el).borderRadius || "0px", opacity: 1 }
     ], { duration: 380, easing: "cubic-bezier(.2,1.08,.3,1)" });
     const inner = el.querySelector(".fade-in");
     if (inner) inner.animate([{ opacity: 0 }, { opacity: 0 }, { opacity: 1 }], { duration: 380 });
@@ -456,10 +533,10 @@ function showList(over)
     let wrap = over.querySelector(".sheet-wrap");
     const keepScroll = wrap ? wrap.querySelector(".sheet").scrollTop : 0;
     over.innerHTML = '<div class="sheet-wrap" style="background:' + c.card + ";color:" + c.onCard + '">'
-        + bar("", iconButton("close", "back", "Back"), statusHtml() + (locked ? "" : '<button class="word' + (arranging ? " on" : "") + '" data-do="arrange">' + (arranging ? "Done" : "Edit") + "</button>" + iconButton("listmenu", "more", "List options")), "on-card")
+        + '<div class="band" style="background:' + c.stripe + '"></div>'
+        + bar("", iconButton("close", "back", "Back"), statusHtml() + undoButtons() + (locked ? "" : '<button class="word' + (arranging ? " on" : "") + '" data-do="arrange">' + (arranging ? "Done" : "Edit") + "</button>" + iconButton("listmenu", "more", "List options")), "on-card")
         + '<main class="sheet"><div class="fade-in">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
-        + '<div class="stripe" style="background:' + c.stripe + '"></div>'
         + (editing && editing.title ? '<input class="title-edit" value="' + text(l.name) + '" enterkeyhint="done">' : '<h2 class="title" data-do="retitle">' + (text(l.name) || '<span class="faint">Untitled list</span>') + "</h2>")
         + '<div class="entries" id="entries">' + html + "</div>"
         + (locked ? "" : '<div class="adders"><button class="adder" data-do="add" data-value="T">+ Add task</button>'
@@ -527,7 +604,7 @@ function showBoard(over)
     }
     else boardView.redraw();
     const head = wrap.querySelector(".head");
-    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("photo", "photo", "Add a photo")));
+    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + undoButtons() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("photo", "photo", "Add a photo")));
     wire(head);
 }
 
@@ -561,9 +638,44 @@ function step(s)
 {
     if (!project || project.base.doc.readOnly) return;
     if (s.list === undefined && open && open.kind === "list") s.list = open.id;
-    project.steps.push(s);
-    refreshView();
+    const undo = run([s]);
+    if (undo.length) { undos.push(undo); if (undos.length > 200) undos.shift(); }
+    redos = [];
+    changed();
+}
+// Steps done, each with what would undo it worked out first; returns the undoing (in the order to do it).
+function run(steps)
+{
+    const back = [];
+    for (const s of steps)
+    {
+        back.unshift(...cnpy.inverse(project.base.doc, project.view, s));
+        project.steps.push(s);
+        refreshView();
+    }
+    return back;
+}
+function undoRedo(redo)
+{
+    if (!project || project.base.doc.readOnly) return;
+    finishTyping(false, false);
+    const from = redo ? redos : undos, to = redo ? undos : redos;
+    if (!from.length) return;
+    const again = run(from.pop());
+    if (again.length) to.push(again);
+    if (picked) picked.ids = picked.ids.filter(id => project.scene.items.some(o => o.id === id));
+    if (picked && !picked.ids.length) picked = null;
+    if (open && open.kind === "board" && !project.scene.boards.some(b => b.id === open.id)) open = null;
+    feel.drop();
+    changed();
+    show();
+    if (picked) tools(picked.viewer);
+}
+function changed()
+{
     keepSteps();
+    app.querySelectorAll('[data-do="undo"]').forEach(b => { b.disabled = !undos.length; });
+    app.querySelectorAll('[data-do="redo"]').forEach(b => { b.disabled = !redos.length; });
     redrawViewers();
     if (project.local) return;
     setState("saving");
@@ -606,7 +718,7 @@ async function save()
         problem = "";
         setState(project.steps.length ? "saving" : "saved");
         if (project.steps.length) saveTimer = setTimeout(save, 400);
-        if (!editing) show(); else redrawViewers();
+        if (!editing && !sheetOpen()) show(); else { redrawViewers(); if (sheetOpen()) redrawEntries(); }
     }
     catch (e)
     {
@@ -627,14 +739,14 @@ function onPicture() { redrawViewers(); if (tab === "boards" && project && !open
 // A newer version saved elsewhere, read in (only with nothing of ours waiting: that goes through saving).
 async function catchUp(quiet)
 {
-    if (!project || project.local || saving || editing || project.steps.length) return;
+    if (!project || project.local || saving || editing || sheetOpen() || project.steps.length) return;
     const p = project;
     try
     {
         const rev = await dbx.version(p.path);
         if (rev === p.base.rev) { if (!quiet) setState("saved"); return; }
         const got = await dbx.read(p.path);
-        if (p !== project || editing || project.steps.length) return;
+        if (p !== project || editing || sheetOpen() || project.steps.length) return;
         await rebase(p, got.bytes, got.rev);
         refreshView();
         if (open && open.kind === "list" && !current()) open = null;
@@ -749,6 +861,7 @@ async function openPath(path)
         const doc = await cnpy.open(got.bytes);
         const waiting = remembered("canopy.steps." + path, null) || [];   // changes made here that never got saved: done again
         project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, pictures: new Map() };
+        undos = []; redos = [];
         project.get = render.pictures(doc, project.pictures, onPicture);
         await photosReady(project);
         refreshView();
@@ -768,6 +881,7 @@ async function openLocal(file)
     {
         const doc = await cnpy.open(new Uint8Array(await file.arrayBuffer()));
         project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map() };
+        undos = []; redos = [];
         project.get = render.pictures(doc, project.pictures, onPicture);
         refreshView();
         open = null;
@@ -907,13 +1021,20 @@ function touchEntries(root)
     root.querySelectorAll("#entries .entry").forEach(el =>
     {
         if (arranging || !el.dataset.id) return;
-        let timer = null, x0 = 0, y0 = 0, sliding = false, dx = 0, id = null;
-        const stop = () => { if (timer) clearTimeout(timer); timer = null; };
+        let timer = null, x0 = 0, y0 = 0, sliding = false, dx = 0, id = null, past = false;
+        const stop = () => { if (timer) clearTimeout(timer); timer = null; el.classList.remove("pressing"); };
         el.addEventListener("pointerdown", e =>
         {
             if (e.target.closest("textarea, .check, .link")) return;
-            x0 = e.clientX; y0 = e.clientY; sliding = false; dx = 0; id = e.pointerId;
-            timer = setTimeout(() => { timer = null; el.dataset.held = "1"; if (!calm) el.animate([{ transform: "scale(1)" }, { transform: "scale(.97)" }, { transform: "scale(1)" }], { duration: 220 }); entryMenu(el.dataset.id); }, 480);
+            x0 = e.clientX; y0 = e.clientY; sliding = false; dx = 0; id = e.pointerId; past = false;
+            el.classList.add("pressing");   // (sinks a little while held)
+            timer = setTimeout(() =>
+            {
+                timer = null; el.dataset.held = "1"; el.classList.remove("pressing");
+                feel.hold();
+                if (!calm) el.animate([{ transform: "scale(.96)" }, { transform: "scale(1.025)" }, { transform: "scale(1)" }], { duration: 260, easing: "cubic-bezier(.2,.9,.3,1.3)" });
+                entryMenu(el.dataset.id);
+            }, 480);
         });
         el.addEventListener("pointermove", e =>
         {
@@ -921,7 +1042,12 @@ function touchEntries(root)
             const mx = e.clientX - x0, my = e.clientY - y0;
             if (Math.abs(mx) + Math.abs(my) > 10) stop();
             if (!sliding && mx < -14 && Math.abs(mx) > Math.abs(my) * 1.5) { sliding = true; el.setPointerCapture(e.pointerId); el.classList.add("swiping"); }
-            if (sliding) { dx = Math.min(0, mx); el.style.transform = "translateX(" + dx + "px)"; el.style.setProperty("--swipe", Math.min(1, -dx / (el.offsetWidth * 0.35))); }
+            if (sliding)
+            {
+                dx = Math.min(0, mx); el.style.transform = "translateX(" + dx + "px)"; el.style.setProperty("--swipe", Math.min(1, -dx / (el.offsetWidth * 0.35)));
+                const now = -dx > el.offsetWidth * 0.35;
+                if (now !== past) { past = now; feel.edge(); el.classList.toggle("doomed", now); }
+            }
         });
         const up = () =>
         {
@@ -932,10 +1058,11 @@ function touchEntries(root)
             if (-dx > el.offsetWidth * 0.35)
             {
                 const gone = () => { step({ t: "del", id: el.dataset.id }); show(); };
+                feel.gone();
                 if (calm) return gone();
                 el.animate([{ transform: "translateX(" + dx + "px)", opacity: 1 }, { transform: "translateX(-110%)", opacity: 0 }], { duration: 180, easing: "ease-in" }).onfinish = gone;
             }
-            else { el.style.transition = "transform .2s cubic-bezier(.2,1.2,.3,1)"; el.style.transform = ""; el.classList.remove("swiping"); setTimeout(() => { el.style.transition = ""; }, 220); }
+            else { el.style.transition = "transform .2s cubic-bezier(.2,1.2,.3,1)"; el.style.transform = ""; el.classList.remove("swiping", "doomed"); setTimeout(() => { el.style.transition = ""; }, 220); }
         };
         el.addEventListener("pointerup", up);
         el.addEventListener("pointercancel", up);
@@ -947,9 +1074,10 @@ function touchEntries(root)
 // A sheet up from the bottom, over the list: "build" makes its inside (again, as what it shows changes), and taps on
 // its [data-do] parts go to "chose" (with "close" and "again", to draw it anew). It stays open until told or tapped off;
 // the list behind is drawn again as it goes.
+function sheetOpen() { return !!app.querySelector(".picker"); }
 function sheetUp(build, chose)
 {
-    const over = app.querySelector("#over .sheet-wrap");
+    const over = app.querySelector("#over .sheet-wrap") || app;
     const sheet = element('<div class="picker"><div class="shade"></div><div class="panel"></div></div>');
     over.appendChild(sheet);
     const panel = sheet.querySelector(".panel");
@@ -969,7 +1097,12 @@ function sheetUp(build, chose)
         panel.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); if (!closing) chose(b.dataset.do, b.dataset.value, close, again); }));
     };
     again();
-    sheet.querySelector(".shade").addEventListener("click", () => close());
+    // (The finger that held an entry down to open this is still on the glass: its lift is no tap on the shade. Only a
+    // press that starts on the shade, after it is up, closes it.)
+    const shade = sheet.querySelector(".shade"), since = performance.now();
+    let armed = false;
+    shade.addEventListener("pointerdown", () => { armed = performance.now() - since > 120; });
+    shade.addEventListener("click", () => { if (armed) close(); armed = false; });
     if (!calm)
     {
         panel.animate([{ transform: "translateY(100%)" }, { transform: "none" }], { duration: 320, easing: "cubic-bezier(.2,1.1,.3,1)" });
@@ -984,7 +1117,7 @@ function recolour()
     if (!l || !wrap) return;
     const c = render.listLook(l);
     wrap.style.background = c.card; wrap.style.color = c.onCard;
-    const stripe = wrap.querySelector(".sheet .stripe");
+    const stripe = wrap.querySelector(".band");
     if (stripe) stripe.style.background = c.stripe;
     redrawEntries();
 }
@@ -1104,6 +1237,22 @@ function follow(id)
     canvasView.fit(to.area, 0.18, true);
 }
 
+// Who is signed in, the sound, opening a project from this phone, signing out.
+function accountMenu()
+{
+    const build = () => '<div class="ptitle">' + (dbx.who() ? "Signed in as " + text(dbx.who()) : "Signed in to Dropbox") + "</div>"
+        + '<button class="pick" data-do="sound"><span>Sounds</span><span class="kind-name">' + (sound ? "On" : "Off") + "</span></button>"
+        + '<button class="pick" data-do="local"><span>Open a project from this phone</span></button>'
+        + '<div class="hint">Changes to a project opened from the phone stay on it until you save a copy.</div>'
+        + '<button class="pick danger" data-do="signout"><span>Sign out</span></button>';
+    sheetUp(build, (does, value, close, again) =>
+    {
+        if (does === "sound") { sound = !sound; remember("canopy.sound", sound); click(1100, true); again(); }
+        else if (does === "local") { const pk = app.querySelector("#picker"); if (pk) pk.click(); close(() => { }); }   // (asked for at once: a phone only shows its files for a tap)
+        else if (does === "signout") close(() => { dbx.signOut(); project = null; show(); });
+    });
+}
+
 // ---- what each button does ----
 
 function wire(root)
@@ -1123,7 +1272,7 @@ function wire(root)
             if (ta.dataset.gone || !app.contains(ta)) return;
             finishTyping(false, false);
             const drawn = draws;
-            setTimeout(() => { if (draws === drawn) show(); }, 350);   // (nothing else drew the page: drawn now, the words in place)
+            setTimeout(() => { if (draws === drawn && !sheetOpen()) show(); }, 350);   // (nothing else drew the page: drawn now, the words in place)
         });
     }
     scope.querySelectorAll("select.kind").forEach(s => s.addEventListener("change", () =>
@@ -1142,12 +1291,17 @@ function act(what, value, ev, el)
     switch (what)
     {
         case "signin": dbx.signIn(); break;
-        case "account":
-            if (confirm("Signed in to Dropbox" + (dbx.who() ? " as " + dbx.who() : "") + ".\n\nSign out?")) { dbx.signOut(); project = null; show(); }
+        case "account": accountMenu(); break;
+        case "back":
+            if (back.length) { ahead.push(folder); folder = back.pop(); }
+            else if (folder !== "") { ahead.push(folder); folder = folder.split("/").slice(0, -1).join("/"); }   // (opened here: back is up a folder)
+            remember("canopy.folder", folder); showFiles();
             break;
+        case "ahead": if (ahead.length) { back.push(folder); folder = ahead.pop(); remember("canopy.folder", folder); showFiles(); } break;
+        case "undo": undoRedo(false); break;
+        case "redo": undoRedo(true); break;
         case "pick": app.querySelector("#picker").click(); break;
-        case "into": folder = value; remember("canopy.folder", folder); showFiles(); break;
-        case "up": folder = folder.split("/").slice(0, -1).join("/"); remember("canopy.folder", folder); showFiles(); break;
+        case "into": back.push(folder); ahead = []; folder = value; remember("canopy.folder", folder); showFiles(); break;
         case "open": openPath(value); break;
         case "files":
             closeViewers();
@@ -1179,7 +1333,7 @@ function act(what, value, ev, el)
         case "tick":
         {
             const r = current().rows.find(o => o.id === value);
-            if (r) step({ t: "set", id: r.id, fields: { done: !r.done } });
+            if (r) { step({ t: "set", id: r.id, fields: { done: !r.done } }); if (r.done) feel.untick(); else feel.tick(); }
             show();
             const box = app.querySelector('.entry[data-id="' + CSS.escape(value) + '"] .check span');
             if (box && !calm) box.animate([{ transform: "scale(.6)" }, { transform: "scale(1.18)" }, { transform: "scale(1)" }], { duration: 260, easing: "cubic-bezier(.2,.9,.3,1.3)" });
@@ -1212,6 +1366,15 @@ function act(what, value, ev, el)
         case "listmenu": listMenu(); break;
     }
 }
+
+document.addEventListener("keydown", e =>
+{
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || !project) return;
+    if (e.target.closest && e.target.closest("textarea, input")) return;   // (typing: the box's own undo)
+    const k = e.key.toLowerCase();
+    if (k === "z") { e.preventDefault(); undoRedo(e.shiftKey); }
+    else if (k === "y") { e.preventDefault(); undoRedo(true); }
+});
 
 // ---- starting ----
 

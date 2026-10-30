@@ -112,12 +112,13 @@ export function scene(doc, view)
         .map(o => o.kind === "list" && lists.has(o.id) ? lists.get(o.id) : view.moved.has(o.id) ? placed(o, view.moved.get(o.id)) : o)
         .map(o => view.locks.has(o.id) ? { ...o, locked: view.locks.get(o.id) } : o);
     for (const l of view.lists) if (l.fresh) items.push(l);
+    for (const r of view.restored) items.push(r.by ? placed(r.item, r.by) : r.item);
     for (const p of view.photos) items.push({ kind: "image", locked: !!p.locked, id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
     const masks = new Map();   // a clipped group's path → its mask (the topmost of it, marked as one)
     const top = new Map();
     for (const o of items) if (o.group) { const ids = o.group.split("/"); for (let k = 1; k <= ids.length; k++) top.set(ids.slice(0, k).join("/"), o); }
     for (const [g, o] of top) if (o.clip && o.group === g) masks.set(g, o);
-    return { doc, items, masks, boards: doc.boards.concat(view.boards) };
+    return { doc, items, masks, boards: doc.boards.filter(b => !view.goneBoards.has(b.id)).concat(view.boards) };
 }
 
 function hidden(doc, o)
@@ -235,12 +236,137 @@ function pathOf(o)
 {
     if (!o._path)
     {
-        const own = new Path2D(o.d || "");
         const sx = o.bw > 0 ? o.w / o.bw : 1, sy = o.bh > 0 ? o.h / o.bh : 1;
-        o._path = new Path2D();
-        o._path.addPath(own, new DOMMatrix([sx, 0, 0, sy, o.x - o.bx * sx, o.y - o.by * sy]));
+        if (o.dynamic) o._path = rounded(o.d, o.dynamic, p => ({ x: o.x + (p.x - o.bx) * sx, y: o.y + (p.y - o.by) * sy }), (sx + sy) / 2);
+        else
+        {
+            const own = new Path2D(o.d || "");
+            o._path = new Path2D();
+            o._path.addPath(own, new DOMMatrix([sx, 0, 0, sy, o.x - o.bx * sx, o.y - o.by * sy]));
+        }
     }
     return o._path;
+}
+
+// ---- dynamic corners: a path's corners rounded where it says ("piece.point=radius;..."), on the canvas, as the
+// desktop app rounds them (so they stay circular however the path is stretched) ----
+
+const far = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mixP = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+const same = (a, b) => a.x === b.x && a.y === b.y;
+
+// The path's outline read into pieces of points, each with its handles ("in" and "out"; at the point for none).
+function pieces(d)
+{
+    const all = [], nums = s => (s.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi) || []).map(Number);
+    let piece = null, at = { x: 0, y: 0 }, start = at;
+    const add = p => { const n = { p, in: p, out: p, corner: 0 }; piece.nodes.push(n); return n; };
+    for (const [, cmd, args] of (d || "").matchAll(/([MLHVCSQTZmlhvcsqtz])([^MLHVCSQTZmlhvcsqtz]*)/g))
+    {
+        const v = nums(args), rel = cmd === cmd.toLowerCase() && cmd !== "z" && cmd !== "Z", C = cmd.toUpperCase();
+        const P = (x, y) => rel ? { x: at.x + x, y: at.y + y } : { x, y };
+        if (C === "M") { piece = { nodes: [], closed: false }; all.push(piece); at = P(v[0], v[1]); start = at; add(at); for (let i = 2; i + 1 < v.length; i += 2) { at = P(v[i], v[i + 1]); add(at); } }
+        else if (!piece) continue;
+        else if (C === "L") for (let i = 0; i + 1 < v.length; i += 2) { at = P(v[i], v[i + 1]); add(at); }
+        else if (C === "H") for (const x of v) { at = { x: rel ? at.x + x : x, y: at.y }; add(at); }
+        else if (C === "V") for (const y of v) { at = { x: at.x, y: rel ? at.y + y : y }; add(at); }
+        else if (C === "C") for (let i = 0; i + 5 < v.length; i += 6) { const last = piece.nodes[piece.nodes.length - 1]; last.out = P(v[i], v[i + 1]); const c2 = P(v[i + 2], v[i + 3]); at = P(v[i + 4], v[i + 5]); add(at).in = c2; }
+        else if (C === "Q") for (let i = 0; i + 3 < v.length; i += 4) { const last = piece.nodes[piece.nodes.length - 1], m = P(v[i], v[i + 1]), b = P(v[i + 2], v[i + 3]); last.out = mixP(last.p, m, 2 / 3); add(b).in = mixP(b, m, 2 / 3); at = b; }
+        else if (C === "Z")
+        {
+            piece.closed = true;
+            const first = piece.nodes[0], end = piece.nodes[piece.nodes.length - 1];
+            if (piece.nodes.length > 1 && far(end.p, first.p) < 0.001) { first.in = end.in; piece.nodes.pop(); }
+            at = start;
+        }
+    }
+    return all.filter(x => x.nodes.length);
+}
+function leave(p, ...towards) { for (const t of towards) { const l = far(t, p); if (l > 1e-6) return { x: (t.x - p.x) / l, y: (t.y - p.y) / l }; } return null; }
+function corner(pc, i)   // a point's sides' directions and lengths, if it can be rounded
+{
+    const ns = pc.nodes, n = ns.length;
+    if (n < 2 || (!pc.closed && (i === 0 || i === n - 1)) || (!pc.closed && n < 3)) return null;
+    const a = ns[(i + n - 1) % n], p = ns[i], b = ns[(i + 1) % n];
+    const u = leave(p.p, p.in, a.out, a.p), v = leave(p.p, p.out, b.in, b.p), lu = far(a.p, p.p), lv = far(b.p, p.p);
+    if (!u || !v || lu < 0.001 || lv < 0.001) return null;
+    const cos = u.x * v.x + u.y * v.y;
+    return cos > -0.9998 && cos < 0.9998 ? { cos, lu, lv } : null;
+}
+function want(pc, i, r) { const k = r > 0 && corner(pc, i); return k ? r / Math.tan(Math.acos(Math.max(-1, Math.min(1, k.cos))) / 2) : 0; }
+function fitCorner(pc, i, r)   // how far from the point its curve starts, its sides shared with the corners at their other ends
+{
+    const k = corner(pc, i);
+    if (!k) return 0;
+    const n = pc.nodes.length, d = r / Math.tan(Math.acos(Math.max(-1, Math.min(1, k.cos))) / 2);
+    const wb = want(pc, (i + n - 1) % n, pc.nodes[(i + n - 1) % n].corner), wa = want(pc, (i + 1) % n, pc.nodes[(i + 1) % n].corner);
+    return Math.min(d, d + wb <= k.lu ? d : k.lu * d / (d + wb), d + wa <= k.lv ? d : k.lv * d / (d + wa));
+}
+const curveOf = (pc, i) => { const a = pc.nodes[i], b = pc.nodes[(i + 1) % pc.nodes.length]; return [a.p, a.out, b.in, b.p]; };
+function onCurve(c, t) { const u = 1 - t; return { x: c[0].x * u * u * u + c[1].x * 3 * u * u * t + c[2].x * 3 * u * t * t + c[3].x * t * t * t, y: c[0].y * u * u * u + c[1].y * 3 * u * u * t + c[2].y * 3 * u * t * t + c[3].y * t * t * t }; }
+function heading(c, t)
+{
+    const u = 1 - t, dx = (c[1].x - c[0].x) * 3 * u * u + (c[2].x - c[1].x) * 6 * u * t + (c[3].x - c[2].x) * 3 * t * t, dy = (c[1].y - c[0].y) * 3 * u * u + (c[2].y - c[1].y) * 6 * u * t + (c[3].y - c[2].y) * 3 * t * t;
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-9) { const L = Math.max(1e-9, far(c[3], c[0])); return { x: (c[3].x - c[0].x) / L, y: (c[3].y - c[0].y) / L }; }
+    return { x: dx / l, y: dy / l };
+}
+function cut(c, t, keepLeft)
+{
+    const p01 = mixP(c[0], c[1], t), p12 = mixP(c[1], c[2], t), p23 = mixP(c[2], c[3], t), p012 = mixP(p01, p12, t), p123 = mixP(p12, p23, t), m = mixP(p012, p123, t);
+    return keepLeft ? [c[0], p01, p012, m] : [m, p123, p23, c[3]];
+}
+function part(c, t0, t1) { const left = cut(c, t1, true); return t1 <= 1e-9 ? left : cut(left, t0 / t1, false); }
+function reach(c, d, fromEnd)
+{
+    const end = fromEnd ? c[3] : c[0];
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2, t = fromEnd ? 1 - mid : mid; if (far(onCurve(c, t), end) < d) lo = mid; else hi = mid; }
+    return fromEnd ? 1 - (lo + hi) / 2 : (lo + hi) / 2;
+}
+function rounded(d, corners, place, scale)
+{
+    const all = pieces(d);
+    for (const pc of all) for (const n of pc.nodes) { n.p = place(n.p); n.in = place(n.in); n.out = place(n.out); }
+    for (const one of corners.split(";"))
+    {
+        const m = one.match(/^(\d+)\.(\d+)=(.+)$/);
+        if (m && all[+m[1]] && all[+m[1]].nodes[+m[2]]) all[+m[1]].nodes[+m[2]].corner = parseFloat(m[3]) * scale;
+    }
+    const path = new Path2D();
+    for (const pc of all)
+    {
+        const ns = pc.nodes, n = ns.length, segs = pc.closed ? n : n - 1;
+        if (segs < 1) continue;
+        const start = new Array(segs).fill(0), end = new Array(segs).fill(1), round = new Array(n).fill(false);
+        for (let i = 0; i < n; i++)
+        {
+            if (ns[i].corner <= 0) continue;
+            const along = fitCorner(pc, i, ns[i].corner);
+            if (along <= 0.001) continue;
+            round[i] = true;
+            if (pc.closed || i > 0) end[(i + n - 1) % n] = reach(curveOf(pc, (i + n - 1) % n), along, true);
+            if (i < segs) start[i] = reach(curveOf(pc, i), along, false);
+        }
+        const parts = [];
+        for (let j = 0; j < segs; j++) parts.push(part(curveOf(pc, j), start[j], end[j]));
+        path.moveTo(parts[0][0].x, parts[0][0].y);
+        for (let j = 0; j < segs; j++)
+        {
+            const c = parts[j], whole = curveOf(pc, j), a = ns[j], b = ns[(j + 1) % n], len = far(whole[0], whole[3]);
+            if (far(c[0], c[3]) < 1e-3 * len && far(c[0], c[1]) + far(c[2], c[3]) < 1e-3 * len) { }   // (a side the corners use up: left out)
+            else if (same(a.out, a.p) && same(b.in, b.p)) path.lineTo(c[3].x, c[3].y);
+            else path.bezierCurveTo(c[1].x, c[1].y, c[2].x, c[2].y, c[3].x, c[3].y);
+            const k = (j + 1) % n;
+            if (!round[k] || (!pc.closed && k === 0)) continue;
+            // The corner: from this side's end to the next side's start, leaving and arriving along them.
+            const q1 = c[3], q2 = parts[(j + 1) % segs][0], t1 = heading(curveOf(pc, j), end[j]), t2 = heading(curveOf(pc, k % segs), start[k % segs]);
+            const turn = Math.acos(Math.max(-1, Math.min(1, t1.x * t2.x + t1.y * t2.y))), radius = far(q1, q2) / Math.max(1e-9, 2 * Math.sin(turn / 2)), h = 4 / 3 * Math.tan(turn / 4) * radius;
+            path.bezierCurveTo(q1.x + t1.x * h, q1.y + t1.y * h, q2.x - t2.x * h, q2.y - t2.y * h, q2.x, q2.y);
+        }
+        if (pc.closed) path.closePath();
+    }
+    return path;
 }
 
 // A fill: a colour, or the gradient its text describes, across its box at its angle.
@@ -429,6 +555,7 @@ function drawType(ctx, o, b, redraw)
 const NOTE = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 let measurer = null;
 function measureCtx(ctx) { if (ctx) return ctx; if (!measurer) measurer = document.createElement("canvas").getContext("2d"); return measurer; }
+const BAND = 10;   // a list's colour, as a band along its card's top edge
 export function listLayout(o, ctx)
 {
     const key = o.w + "|" + o.name + "|" + o.showDone + "|" + o.rows.map(r => r.kind + r.done + r.text + (r.link ? 1 : 0)).join("\u0001");
@@ -438,7 +565,7 @@ export function listLayout(o, ctx)
     c.save();
     c.font = "700 20px " + NOTE;
     const title = wrap(c, o.name || "", w - 40);
-    let y = 42 + title.length * 25 + 16;
+    let y = BAND + 20 + title.length * 25 + 16;
     const entries = [];
     for (const r of o.rows)
     {
@@ -467,33 +594,34 @@ function drawList(ctx, o)
     ctx.translate(o.x, o.y);
     ctx.scale(o.scale, o.scale);
     ctx.fillStyle = look.card;
-    ctx.beginPath(); ctx.roundRect(0, 0, w, L.h, 6); ctx.fill();
-    ctx.fillStyle = rgba(look.stripe);
-    ctx.beginPath(); ctx.roundRect(20, 20, Math.max(0, w - 40), 8, 2); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(0, 0, w, L.h, 12); ctx.fill();
+    ctx.save(); ctx.clip();   // the band: the list's colour along its top edge, its corners the card's
+    ctx.fillStyle = rgba(look.stripe); ctx.fillRect(0, 0, w, BAND);
+    ctx.restore();
     ctx.fillStyle = look.onCard;
     ctx.font = "700 20px " + NOTE;
     ctx.textBaseline = "top";
-    L.title.forEach((t, i) => ctx.fillText(t, 20, 42 + i * 25));
+    L.title.forEach((t, i) => ctx.fillText(t, 20, BAND + 20 + i * 25));
     for (const e of L.entries)
     {
         const r = e.r;
         if (r.kind === "D") { ctx.fillStyle = shade(look.tile, 0.14); ctx.beginPath(); ctx.roundRect(20 + (w - 40) * 0.25, e.y + e.h / 2 - 2, (w - 40) * 0.5, 4, 2); ctx.fill(); continue; }
         ctx.save();
         if (r.done) ctx.globalAlpha *= 0.5;
-        if (r.kind !== "H") { ctx.fillStyle = look.tile; ctx.beginPath(); ctx.roundRect(20, e.y, w - 40, e.h, 4); ctx.fill(); }
+        if (r.kind !== "H") { ctx.fillStyle = look.tile; ctx.beginPath(); ctx.roundRect(20, e.y, w - 40, e.h, 8); ctx.fill(); }
+        const head = r.kind === "H", left = r.kind === "T" ? 46 : head ? 4 : 16, lh = head ? 22 : 20;
+        const top = e.y + (e.h - e.lines.length * lh) / 2;
         if (r.kind === "T")
         {
-            const ink = r.color ? rgba(r.color) : look.box, bx = 36, by = e.y + e.h / 2 - 8;
+            const ink = r.color ? rgba(r.color) : look.box, bx = 36, by = top + lh / 2 - 8;   // (in line with its first line)
             ctx.lineWidth = 1.6; ctx.strokeStyle = ink;
             ctx.beginPath(); ctx.roundRect(bx, by, 16, 16, 2);
             if (r.done) { ctx.fillStyle = ink; ctx.fill(); ctx.strokeStyle = ink; ctx.stroke(); ctx.strokeStyle = dark(r.color || look.box) ? "#fff" : "#000"; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(bx + 3.8, by + 8.4); ctx.lineTo(bx + 6.8, by + 11.4); ctx.lineTo(bx + 12.2, by + 5); ctx.stroke(); }
             else ctx.stroke();
         }
-        const head = r.kind === "H", left = r.kind === "T" ? 46 : head ? 4 : 16, lh = head ? 22 : 20;
         ctx.fillStyle = head ? look.onCard : look.ink;
         ctx.font = (head ? "700 17px " : "400 15px ") + NOTE;
         ctx.textBaseline = "middle";
-        const top = e.y + (e.h - e.lines.length * lh) / 2;
         e.lines.forEach((t, i) =>
         {
             const x = 20 + left, y = top + lh * (i + 0.5);
