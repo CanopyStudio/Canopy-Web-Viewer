@@ -1,0 +1,7 @@
+THIRD-PARTY SOFTWARE NOTICES
+
+This page is built with the open-source software and fonts listed here. Each is used under its own licence, all of
+which allow use in commercial software. Their licences are kept beside them.
+
+  JSZip                    MIT          reading and writing .cnpy files (zips)        vendor/jszip-LICENSE.md
+  IBM Plex Sans            SIL OFL 1.1  the interface typeface                        fonts/IBMPlexSans-OFL.txt

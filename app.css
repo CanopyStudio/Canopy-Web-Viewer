@@ -1,0 +1,112 @@
+/* Canopy Board on a phone: the desktop app's Forest look, its lists as they are on the canvas. */
+
+@font-face { font-family: "IBM Plex Sans"; src: url(fonts/IBMPlexSans-Regular.ttf); font-weight: 400; }
+@font-face { font-family: "IBM Plex Sans"; src: url(fonts/IBMPlexSans-Medium.ttf); font-weight: 500; }
+@font-face { font-family: "IBM Plex Sans"; src: url(fonts/IBMPlexSans-SemiBold.ttf); font-weight: 600; }
+
+:root {
+    --canvas: #161717; --chrome: #151616; --card: #1E2020; --button: #2F3332; --border: #343A38;
+    --ink: #EAECEB; --muted: #A5A8A7; --heading: #D2F6D1; --accent: #428C6A; --accent-deep: #3E735B;
+    --chosen: #2B3631; --notice: #E0A23B;
+    --face: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
+    --note: -apple-system, system-ui, "Segoe UI", sans-serif;   /* lists keep the system's own type, as on the canvas */
+    --top: env(safe-area-inset-top, 0px); --bottom: env(safe-area-inset-bottom, 0px);
+    --left: env(safe-area-inset-left, 0px); --right: env(safe-area-inset-right, 0px);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--ink); }
+body { font: 400 16px/1.35 var(--face); -webkit-font-smoothing: antialiased; overscroll-behavior-y: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input, textarea, select { font: inherit; color: inherit; }
+svg { display: block; }
+
+#app { min-height: 100%; display: flex; flex-direction: column; }
+
+/* ---- the bar along the top ---- */
+.bar {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 4px;
+    padding: calc(var(--top) + 6px) calc(var(--right) + 8px) 6px calc(var(--left) + 8px);
+    background: var(--chrome); border-bottom: 1px solid var(--border); min-height: calc(var(--top) + 56px);
+}
+.bar h1 { flex: 1; margin: 0 6px; font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar .icon { width: 44px; height: 44px; border-radius: 8px; display: grid; place-items: center; flex: none; }
+.bar .icon:active, .bar .word:active { background: var(--button); }
+.bar .word { height: 36px; padding: 0 12px; border-radius: 8px; font-weight: 500; font-size: 15px; flex: none; }
+.bar .word.on { background: var(--accent); color: #fff; }
+
+.status { font-size: 12px; color: var(--muted); padding: 0 6px; white-space: nowrap; flex: none; }
+.status.warn { color: var(--notice); }
+
+.page { flex: 1; padding: 12px calc(var(--right) + 12px) calc(var(--bottom) + 24px) calc(var(--left) + 12px); }
+
+/* ---- signing in ---- */
+.hello { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 32px calc(var(--right) + 24px) calc(var(--bottom) + 32px) calc(var(--left) + 24px); text-align: center; }
+.hello img { width: 88px; height: 88px; border-radius: 20px; }
+.hello h1 { margin: 6px 0 0; font-size: 22px; font-weight: 600; }
+.hello p { margin: 0; color: var(--muted); max-width: 320px; }
+.main-button { min-height: 48px; padding: 0 22px; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
+.main-button:active { background: var(--accent-deep); }
+.quiet-button { min-height: 44px; padding: 0 16px; border-radius: 10px; background: var(--button); font-weight: 500; }
+.quiet-button:active { background: var(--border); }
+.hidden-input { display: none; }
+
+/* ---- files ---- */
+.section { margin: 18px 4px 8px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--heading); }
+.section:first-child { margin-top: 4px; }
+.where { margin: 2px 4px 10px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.rows { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 14px; text-align: left; }
+.item + .item { border-top: 1px solid var(--border); }
+.item:active { background: var(--chosen); }
+.item .label { flex: 1; min-width: 0; }
+.item .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item svg { flex: none; color: var(--muted); }
+.empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+.local { margin-top: 22px; display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; text-align: center; }
+.problem { margin: 8px 4px; padding: 10px 12px; border-radius: 8px; background: #3a2a1a; color: #f3d9b0; font-size: 14px; }
+
+/* ---- a project's lists ---- */
+.cards { display: grid; gap: 12px; }
+.card { display: block; width: 100%; text-align: left; border-radius: 6px; padding: 14px 16px 12px; background: #262927; }
+.card:active { filter: brightness(1.12); }
+.card .stripe { height: 6px; border-radius: 2px; margin-bottom: 12px; }
+.card .title { font: 700 18px/1.25 var(--note); }
+.card .count { margin-top: 2px; font-size: 13px; opacity: .7; }
+.card .peek { margin-top: 10px; display: grid; gap: 4px; font: 400 14px/1.3 var(--note); }
+.card .peek div { padding: 6px 10px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .peek .done { opacity: .5; text-decoration: line-through; }
+.card .layer { margin-top: 8px; font-size: 12px; opacity: .55; }
+
+/* ---- one list, full screen ---- */
+.sheet { flex: 1; padding: 16px calc(var(--right) + 14px) calc(var(--bottom) + 40px) calc(var(--left) + 14px); }
+.sheet .stripe { height: 8px; border-radius: 2px; margin: 2px 2px 14px; }
+.sheet .title { margin: 0 2px 14px; font: 700 22px/1.25 var(--note); overflow-wrap: anywhere; }
+.entries { display: flex; flex-direction: column; gap: 6px; }
+.entry { position: relative; display: flex; align-items: center; min-height: 50px; border-radius: 4px; font: 400 17px/1.35 var(--note); touch-action: pan-y; }
+.entry.T, .entry.N { padding: 0 6px 0 0; }
+.entry.N { padding-left: 16px; }
+.entry.H { min-height: 40px; padding: 8px 4px 2px; font-weight: 700; font-size: 19px; background: none !important; }
+.entry.D { min-height: 26px; justify-content: center; background: none !important; }
+.entry.D .line { width: 50%; height: 4px; border-radius: 2px; }
+.entry.done .words, .entry.done .check { opacity: .5; }
+.entry.done .words { text-decoration: line-through; }
+.check { width: 50px; align-self: stretch; display: grid; place-items: center; flex: none; }
+.check span { width: 22px; height: 22px; border-radius: 3px; border: 2px solid; display: grid; place-items: center; }
+.words { flex: 1; min-width: 0; padding: 12px 6px 12px 0; overflow-wrap: anywhere; min-height: 1.35em; }
+.entry.H .words { padding: 6px 0 4px; }
+.words:empty::before { content: "\200b"; }
+.entry textarea { flex: 1; min-width: 0; border: 0; outline: 0; resize: none; background: transparent; padding: 12px 6px 12px 0; font: inherit; line-height: inherit; overflow: hidden; }
+.entry.editing { outline: 2px solid var(--accent); outline-offset: -2px; }
+.link { flex: none; opacity: .7; padding: 0 8px; }
+.handle, .remove { flex: none; width: 44px; align-self: stretch; display: grid; place-items: center; touch-action: none; }
+.remove { color: #e07a6a; }
+.kind { flex: none; width: 74px; margin-right: 2px; border: 0; border-radius: 6px; padding: 7px 8px; background: rgba(0,0,0,.2); font: 500 13px var(--face); -webkit-appearance: none; appearance: none; text-align: center; text-align-last: center; }
+.entry.lifted { z-index: 3; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.entry.sliding { transition: transform .15s ease; }
+.adders { display: flex; gap: 8px; margin-top: 12px; }
+.adder + .adder { flex: none; }
+.adder { flex: 1; white-space: nowrap; min-height: 48px; border-radius: 4px; padding: 0 16px; text-align: left; font: 400 17px var(--note); opacity: .75; border: 1.5px dashed currentColor; }
+.adder:active { opacity: 1; }
+.note-line { display: block; margin: 16px auto 0; padding: 10px 14px; font-size: 14px; opacity: .65; text-decoration: underline; text-underline-offset: 3px; }
