@@ -81,7 +81,7 @@ function wantFont(family, weight, italic, redraw)
 // steps, so it isn't decoded again for every zoom), and again bigger only when zoomed in further; at most a few at once;
 // and the ones not shown lately let go once they add up to too much. So a board of big photos fits in a phone's memory.
 // "cache": one per project, kept as the file is saved and read again (its pictures don't change).
-const BUDGET = 28e6, STEPS = [256, 512, 1024, 2048, 3072];
+const BUDGET = 48e6, STEPS = [256, 512, 1024, 2048, 3072];
 export function cache() { return { seen: new Map(), busy: 0, queue: [], pixels: 0, frame: 0 }; }
 export function forget(c) { if (!c) return; for (const e of c.seen.values()) { if (e.img) e.img.close(); e.img = null; e.closed = true; } c.seen.clear(); c.pixels = 0; c.queue.length = 0; }
 export function pictures(doc, added, redraw, c)
@@ -115,7 +115,6 @@ export function pictures(doc, added, redraw, c)
         if (!e) { e = { img: null, k: 1, side: 0, wanted: 0, frame: 0 }; c.seen.set(file, e); }
         if (e.none) return null;
         e.frame = c.frame;
-        if (e.img && !(e.img.width > 0)) { c.pixels = Math.max(0, c.pixels - (e.side || 0) ** 2); e.img = null; e.side = 0; e.full = false; }   // (emptied by the phone, short of memory: fetched again)
         const side = want ? STEPS.find(x => x >= want * 1.25) || STEPS[STEPS.length - 1] : 1e9;
         if (side > e.side && !e.full && side > e.wanted) { e.wanted = side; c.queue.push({ file, side }); next(); }
         return e.img ? e : null;

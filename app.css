@@ -142,7 +142,7 @@ svg { display: block; }
 
 /* the canvas to look around */
 .stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
-.viewer { display: block; touch-action: none; transform-origin: 0 0; will-change: transform; }   /* (slid and scaled while moving: viewer.js look) */
+.viewer { display: block; touch-action: none; }
 
 /* ---- a list or a board opened over the tabs ---- */
 #over { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
