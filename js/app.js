@@ -722,6 +722,7 @@ function measure(stage)
             "Decoded " + st.decoded + " (" + dm.toFixed(0) + " ms each); waiting " + (c ? c.queue.length + c.busy : 0) + "; let go " + st.dropped + "; failed " + st.failed,
             "Small ones: " + st.previews + " from the file, " + st.kept + " kept on this phone, " + st.made + " made now",
             "On screen still to come: " + st.gaps + "; tried again " + st.retried + "; not in the file " + st.missing,
+            "Too big for one piece: " + st.huge + "; came back blank: " + st.blank,
             "Zoom " + (v ? (v.cam.s * 100).toFixed(0) : "?") + "%, screen " + (v ? v.w + " \u00d7 " + v.h + " at " + v.dpr + "x" : "?") + (navigator.deviceMemory ? ", " + navigator.deviceMemory + " GB" : "")
         ].join("\n");
         setTimeout(tick, 500);

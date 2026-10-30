@@ -87,7 +87,7 @@ function wantFont(family, weight, italic, redraw)
 // decode, are decoded once, not again at each step of a zoom, and not at all on a phone that has seen them before.
 const BUDGET = 48e6, SMALL = 1024, BIG = 2048;
 // What the pictures and drawing are costing, for the measuring readout (?measure on the address).
-export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0, previews: 0, kept: 0, made: 0, missing: 0, gaps: 0, retried: 0 };
+export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0, previews: 0, kept: 0, made: 0, missing: 0, gaps: 0, retried: 0, huge: 0, blank: 0 };
 export function cache() { return { seen: new Map(), busy: 0, queue: [], pixels: 0, frame: 0 }; }
 export function forget(c) { if (!c) return; for (const e of c.seen.values()) { if (e.img) e.img.close(); e.img = null; e.closed = true; } c.seen.clear(); c.pixels = 0; c.queue.length = 0; }
 export function pictures(doc, added, redraw, c)
@@ -143,9 +143,14 @@ export function pictures(doc, added, redraw, c)
         const pre = doc.zip.file("previews/" + file + ".webp"), size = pre ? (await previewSizes(doc)).get(file) : null;
         if (pre && size) { const img = await createImageBitmap(new Blob([await pre.async("uint8array")], { type: "image/webp" })); stats.previews++; return { img, k: img.width / size.w, full: false, src: size }; }
         const keptCopy = await kept(file);
-        if (keptCopy) { const img = await createImageBitmap(keptCopy.blob); stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h } }; }
+        if (keptCopy)
+        {
+            const img = await createImageBitmap(keptCopy.blob);
+            if (!blank(img)) { stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h } }; }
+            img.close();   // (a blank copy: made again below)
+        }
         const got = await decode(await bytes, SMALL);
-        if (!got.full) { stats.made++; keep(file, got.img, got.src); }
+        if (!got.full && !blank(got.img)) { stats.made++; keep(file, got.img, got.src); }   // (kept only if it has something in it)
         return got;
     }
     return get;
@@ -167,7 +172,9 @@ function previewSizes(doc)
 // ---- the small copies kept on this phone (its own storage: a picture in a project never changes under its name,
 // so a copy made once stays right) ----
 let store = null;
-function copies() { return store || (store = new Promise((ok, no) => { const r = indexedDB.open("canopy-small", 1); r.onupgradeneeded = () => r.result.createObjectStore("small"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); })); }
+// ("canopy-small-2": the copies made before blank pictures were spotted, some of them blank, are let go)
+try { indexedDB.deleteDatabase("canopy-small"); } catch (e) { }
+function copies() { return store || (store = new Promise((ok, no) => { const r = indexedDB.open("canopy-small-2", 1); r.onupgradeneeded = () => r.result.createObjectStore("small"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); })); }
 async function kept(file)
 {
     try { const db = await copies(); return await new Promise(ok => { const r = db.transaction("small").objectStore("small").get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); }); }
@@ -207,6 +214,15 @@ function trim(c)
 async function decode(bytes, side)
 {
     const blob = new Blob([bytes]), size = sizeOf(bytes);
+    if (size && size.w * size.h > HUGE)
+    {
+        // Past what a phone will decode in one piece (it gives back a blank picture, not an error): read by the page's
+        // own picture loader, which can, and made smaller from it. Never whole.
+        const k = Math.min(1, side / Math.max(size.w, size.h)), w = Math.max(1, Math.round(size.w * k)), h = Math.max(1, Math.round(size.h * k));
+        const img = await viaPicture(blob, w, h);
+        stats.huge++;
+        return { img, k: img.width / size.w, full: false, src: size };
+    }
     if (size && Math.max(size.w, size.h) > side)
     {
         const k = side / Math.max(size.w, size.h), w = Math.max(1, Math.round(size.w * k)), h = Math.max(1, Math.round(size.h * k));
@@ -219,10 +235,46 @@ async function decode(bytes, side)
             cv.getContext("2d").drawImage(img, 0, 0, w, h); img.close();
             img = await createImageBitmap(cv); cv.width = cv.height = 0;
         }
+        if (blank(img)) { img.close(); img = await viaPicture(blob, w, h); stats.blank++; }   // (came back blank: read the other way)
         return { img, k: img.width / size.w, full: false, src: size };
     }
-    const img = await createImageBitmap(blob);
+    let img = await createImageBitmap(blob);
+    if (size && blank(img)) { img.close(); img = await viaPicture(blob, size.w, size.h); stats.blank++; }
     return { img, k: 1, full: true, src: { w: img.width, h: img.height } };
+}
+// Past this many pixels a phone may not decode a picture at all (an iPhone's limit for one is about 4096 × 4096).
+const HUGE = 16e6;
+// A picture read by the page's own loader (as an <img> would show it: a phone shrinks a big one as it reads it), then
+// drawn at the size wanted.
+async function viaPicture(blob, w, h)
+{
+    const url = URL.createObjectURL(blob);
+    try
+    {
+        const pic = new Image();
+        pic.src = url;
+        await pic.decode();
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        const g = cv.getContext("2d"); g.imageSmoothingQuality = "high";
+        g.drawImage(pic, 0, 0, w, h);
+        const img = await createImageBitmap(cv);
+        cv.width = cv.height = 0;
+        return img;
+    }
+    finally { URL.revokeObjectURL(url); }
+}
+// Whether a picture came back with nothing in it (looked at small: every pixel see-through).
+function blank(img)
+{
+    try
+    {
+        const cv = document.createElement("canvas"); cv.width = cv.height = 8;
+        const g = cv.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0, 8, 8);
+        const d = g.getImageData(0, 0, 8, 8).data;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return false;
+        return true;
+    }
+    catch (e) { return false; }
 }
 // A PNG's, JPEG's, GIF's or WebP's size from its first bytes, or null.
 function sizeOf(b)
