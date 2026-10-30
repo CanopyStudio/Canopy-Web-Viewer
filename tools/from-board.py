@@ -32,6 +32,7 @@ ICONS = [
     ("boards", "panel Boards", "The Boards tab"),
     ("canvas", "kind grid", "The Canvas tab"),
     ("download", "export", "Save a copy (a project opened from the phone)"),
+    ("copy", "copy", "Copy and paste on the canvas, Paste image"),
     ("trash", "trash", "Delete, in menus"),
     ("close", "x", "Closing an image"),
     ("tick", "check mark", "A ticked entry's check box"),

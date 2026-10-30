@@ -924,6 +924,10 @@ let clip = null;   // { things, path (the project they came from), from (its fil
 async function copyPicked(v)
 {
     if (!picked) return;
+    // (the phone's own clipboard marked as holding this, so a paste takes whichever was copied last: this, or an
+    // image copied elsewhere since; written at once, while the tap still counts)
+    const mark = "canopy-copy:" + cnpy.newId();
+    try { navigator.clipboard.writeText(mark).catch(() => { }); } catch (e) { }
     const doc = project.base.doc, things = cnpy.copyOut(doc, project.view, picked.ids), files = new Map();
     for (const th of things)
     {
@@ -932,7 +936,7 @@ async function copyPicked(v)
         const z = doc.zip.file(f.file), bytes = project.pictures.get(f.file) || (z ? await z.async("uint8array") : null);
         if (bytes) files.set(f.file, bytes);
     }
-    clip = { things, path: project.path, from: doc, files, box: pickedBox(), n: 0 };
+    clip = { things, path: project.path, from: doc, files, box: pickedBox(), n: 0, mark };
     feel.pick();
     pick(null, v);   // (the bar then says it is copied, and offers to paste)
 }
@@ -962,6 +966,63 @@ function paste(v)
     pick({ ids: made.map(th => th.id), list: made.length === 1 && made[0].list ? made[0].id : null }, v);
     redrawViewers();
 }
+
+// The photo button: a photo from the phone, or the image it has copied (from a web page, say).
+function photoMenu()
+{
+    const build = () => '<div class="actions"><button class="action" data-do="choose">' + icon("photo", 18) + "<span>Choose a photo</span></button>"
+        + '<button class="action" data-do="pasteimage">' + icon("copy", 18) + "<span>Paste image</span></button></div>";
+    sheetUp(build, (does, value, close) =>
+    {
+        // (each asked for at once, in the tap: a phone only shows its photos, or lets a page read what is copied, then)
+        if (does === "choose") { app.querySelector("#photo-picker").click(); close(() => { }); }
+        else if (does === "pasteimage") { const got = readClipboard(); close(() => { }); got.then(placeCopied); }
+    });
+}
+// What the phone or computer has copied: an image, or else its words (a link, say), or why not.
+async function readClipboard()
+{
+    if (!navigator.clipboard || !navigator.clipboard.read) return { why: "This browser can't paste images here" };
+    try
+    {
+        const items = await navigator.clipboard.read();
+        let words = "";
+        for (const it of items)
+        {
+            const type = it.types.find(t => t.startsWith("image/"));
+            if (type) return { image: await it.getType(type) };
+            if (!words && it.types.includes("text/plain")) words = await (await it.getType("text/plain")).text();
+        }
+        return { words };
+    }
+    catch (e) { return { why: "Pasting wasn't allowed" }; }
+}
+// Placed as a photo is: an image; a link to one (where its site lets a page fetch it); something copied here, pasted.
+async function placeCopied(got)
+{
+    if (!project || project.base.doc.readOnly) return;
+    if (got.why) return toast(got.why);
+    const words = (got.words || "").trim();
+    if (clip && words === clip.mark) { const v = boardView || canvasView; if (v) paste(v); return; }
+    let image = got.image;
+    if (!image && /^https?:\/\/\S+$/i.test(words))
+    {
+        toast("Fetching the image\u2026");
+        try { const r = await fetch(words, { mode: "cors" }); const b = r.ok ? await r.blob() : null; if (b && b.type.startsWith("image/")) image = b; } catch (e) { }
+        if (!image) return toast("Couldn't get an image from that link");
+    }
+    if (!image) return toast(words ? "What's copied isn't an image" : "Nothing copied to paste");
+    addPhoto(new File([image], "pasted", { type: image.type || "image/png" }));
+}
+// On a computer, Ctrl+V (or Cmd+V): whichever was copied last.
+document.addEventListener("paste", e =>
+{
+    if (!project || project.base.doc.readOnly || (e.target.closest && e.target.closest("textarea, input"))) return;
+    const d = e.clipboardData, file = d ? [...d.files].find(f => f.type.startsWith("image/")) : null, words = d ? d.getData("text/plain") : "";
+    if (!file && !(clip && words === clip.mark) && !/^https?:\/\//i.test(words.trim()) && !clip) return;
+    e.preventDefault();
+    placeCopied(file ? { image: file } : clip && (!words || words === clip.mark) ? { words: clip.mark } : { words });
+});
 
 function kindName(id)
 {
@@ -1999,7 +2060,7 @@ function act(what, value, ev, el)
             showFiles();
             break;
         }
-        case "photo": app.querySelector("#photo-picker").click(); break;
+        case "photo": photoMenu(); break;
         case "arrange": finishTyping(false, false); arranging = !arranging; editing = null; show(); break;
         case "retitle": if (project.base.doc.readOnly || arranging) break; finishTyping(false, false); editing = { title: true }; show(); break;
         case "follow": follow(value); break;
@@ -2044,9 +2105,7 @@ document.addEventListener("keydown", e =>
     if (!(e.ctrlKey || e.metaKey) || e.altKey || !project) return;
     if (e.target.closest && e.target.closest("textarea, input")) return;   // (typing: the box's own undo)
     const k = e.key.toLowerCase();
-    const v = picked ? picked.viewer : boardView || canvasView;
-    if (k === "c" && picked) { e.preventDefault(); copyPicked(picked.viewer); return; }
-    if (k === "v" && clip && v && app.contains(v.host)) { e.preventDefault(); paste(v); return; }
+    if (k === "c" && picked) { e.preventDefault(); copyPicked(picked.viewer); return; }   // (pasting: the "paste" below)
     if (k === "z") { e.preventDefault(); undoRedo(e.shiftKey); }
     else if (k === "y") { e.preventDefault(); undoRedo(true); }
 });
