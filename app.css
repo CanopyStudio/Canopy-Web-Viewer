@@ -23,9 +23,6 @@ html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--in
    up short of its bottom edge) */
 html.in-project body { overscroll-behavior: none; }
 html.in-project body { background: transparent; }   /* (what is behind the app: the color of what is at its foot) */
-/* On a home screen, the whole screen's height, however tall the phone says the page is (some leave a strip at the foot) */
-html.standalone .project, html.standalone #over, html.standalone .photo-view { bottom: auto; height: 100lvh; }
-html.standalone #over.open.board { height: calc(100lvh - var(--tabs-h, 0px)); }
 html.in-project #app { height: 100%; overflow: hidden; }
 body { font: 400 16px/1.35 var(--face); -webkit-font-smoothing: antialiased; overscroll-behavior-y: none; touch-action: manipulation; }   /* (no zooming the page by a double tap: the canvas has its own) */
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
