@@ -8,24 +8,38 @@ h1 { font-size: 20px; margin: 0 0 12px; }
 p { color: #A5A8A7; margin: 0 0 22px; }
 label { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-radius: 10px; background: #262927; font-size: 18px; }
 input { transform: scale(1.5); margin-right: 10px; }
-button { margin-top: 18px; width: 100%; padding: 16px; border: 0; border-radius: 10px; background: #2F3332; color: #EAECEB; font: inherit; }
+button { margin-top: 12px; width: 100%; padding: 16px; border: 0; border-radius: 10px; background: #2F3332; color: #EAECEB; font: inherit; }
 #said { margin-top: 18px; color: #D2F6D1; min-height: 1.4em; }
 </style></head><body>
 <h1>Haptics test</h1>
 <p>Flip the switch with your finger a few times. If your phone ticks, this browser lets pages buzz. If it doesn't, no page can, and the viewer's buzzing can go.</p>
 <label>Flip me <input type="checkbox" switch></label>
-<button id="hidden">Try the hidden way (as the viewer does)</button>
+<button data-way="1">1. Hidden and removed at once (as the viewer does now)</button>
+<button data-way="2">2. On the page but invisible, removed after a moment</button>
+<button data-way="3">3. One invisible switch kept on the page</button>
+<button data-way="4">4. Invisible switch flipped directly (no label)</button>
 <div id="said"></div>
 <script>
 const said = document.getElementById("said");
-said.textContent = "vibrate: " + ("vibrate" in navigator ? "yes" : "no") + " | switch: " + (document.createElement("input").switch !== undefined || CSS.supports("selector(input[switch])") ? "maybe" : "unknown");
-document.getElementById("hidden").addEventListener("click", () =>
+said.textContent = "Tap each button a few times and note which ones tick.";
+// An invisible but laid-out switch: on the page, out of sight, not in the way of fingers.
+function quiet()
 {
     const label = document.createElement("label"), input = document.createElement("input");
-    label.ariaHidden = "true"; label.style.display = "none";
-    input.type = "checkbox"; input.setAttribute("switch", "");
-    label.appendChild(input); document.head.appendChild(label); label.click(); label.remove();
-    said.textContent = "Tapped: did it tick?";
-});
+    label.ariaHidden = "true";
+    label.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;padding:0;opacity:0.01;overflow:hidden;pointer-events:none;background:none";
+    input.type = "checkbox"; input.setAttribute("switch", ""); input.tabIndex = -1;
+    label.appendChild(input); document.body.appendChild(label);
+    return { label, input };
+}
+let kept = null;
+const ways = {
+    1() { const label = document.createElement("label"), input = document.createElement("input"); label.ariaHidden = "true"; label.style.display = "none"; input.type = "checkbox"; input.setAttribute("switch", ""); label.appendChild(input); document.head.appendChild(label); label.click(); label.remove(); },
+    2() { const q = quiet(); q.label.click(); setTimeout(() => q.label.remove(), 600); },
+    3() { if (!kept) kept = quiet(); kept.label.click(); },
+    4() { const q = quiet(); q.input.click(); setTimeout(() => q.label.remove(), 600); }
+};
+for (const b of document.querySelectorAll("button[data-way]"))
+    b.addEventListener("click", () => { ways[b.dataset.way](); said.textContent = "Tapped " + b.dataset.way + ": did it tick?"; });
 </script>
 </body></html>
