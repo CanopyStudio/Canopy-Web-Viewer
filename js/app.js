@@ -551,22 +551,33 @@ function visible(l) { return l.rows.filter(r => l.showDone || !r.done); }
 
 // A list's card held down: lifted, and dragged to where it should be among the others, which make room for it as it
 // goes (in the columns again, in the order it would leave); let go, that order is kept in the project.
+let listMoved = 0, holdPending = null;   // when the lists last scrolled; the hold to let go of if they do
+const watched = new WeakSet();
 function arrangeCards(holder, cards)
 {
     const scroller = holder;   // (#tab: scrolled while a card is held near its top or bottom)
+    // A hold is a finger kept still on a card, the list not moving: not one stopping the list as it glides, or the
+    // first slow moment of a scroll (which would take the card up and keep the list from scrolling).
+    if (!watched.has(scroller)) { watched.add(scroller); scroller.addEventListener("scroll", () => { listMoved = performance.now(); if (holdPending) holdPending(); }, { passive: true }); }
     for (const c of cards)
     {
-        let timer = null, x0 = 0, y0 = 0;
+        let timer = null, x0 = 0, y0 = 0, top = 0;
         const el = c.el;
         el.addEventListener("pointerdown", e =>
         {
             if (e.button > 0) return;
-            x0 = e.clientX; y0 = e.clientY;
+            if (performance.now() - listMoved < 250) return;   // (gliding still: this press only stops it)
+            x0 = e.clientX; y0 = e.clientY; top = scroller.scrollTop;
             el.classList.add("pressing");
-            timer = setTimeout(() => { timer = null; el.classList.remove("pressing"); if (stillDown(e) && el.isConnected) lift(c, e); }, 420);
+            holdPending = stop;
+            timer = setTimeout(() =>
+            {
+                timer = null; holdPending = null; el.classList.remove("pressing");
+                if (stillDown(e) && el.isConnected && scroller.scrollTop === top) lift(c, e);
+            }, 450);
         });
-        const stop = () => { if (timer) clearTimeout(timer); timer = null; el.classList.remove("pressing"); };
-        el.addEventListener("pointermove", e => { if (timer && Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 8) stop(); });
+        const stop = () => { if (timer) clearTimeout(timer); timer = null; if (holdPending === stop) holdPending = null; el.classList.remove("pressing"); };
+        el.addEventListener("pointermove", e => { if (timer && Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 6) stop(); });
         el.addEventListener("pointerup", stop);
         el.addEventListener("pointercancel", stop);
         el.addEventListener("contextmenu", e => e.preventDefault());
