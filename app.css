@@ -22,6 +22,10 @@ html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--in
 /* (a project open: the app's own frame held still, not the page itself, which on a phone's home screen would come
    up short of its bottom edge) */
 html.in-project body { overscroll-behavior: none; }
+html.in-project body { background: transparent; }   /* (what is behind the app: the color of what is at its foot) */
+/* On a home screen, the whole screen's height, however tall the phone says the page is (some leave a strip at the foot) */
+html.standalone .project, html.standalone #over, html.standalone .photo-view { bottom: auto; height: 100lvh; }
+html.standalone #over.open.board { height: calc(100lvh - var(--tabs-h, 0px)); }
 html.in-project #app { height: 100%; overflow: hidden; }
 body { font: 400 16px/1.35 var(--face); -webkit-font-smoothing: antialiased; overscroll-behavior-y: none; touch-action: manipulation; }   /* (no zooming the page by a double tap: the canvas has its own) */
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
@@ -73,19 +77,23 @@ svg { display: block; }
 .hidden-input { display: none; }
 
 /* ---- files: as the desktop app lists projects (a bold heading; on a card, a row each: the name, a faded note) ---- */
-.section { margin: 26px 2px 10px; font-size: 15px; font-weight: 600; color: var(--ink); }
-.section:first-child { margin-top: 8px; }
-.where { margin: -6px 2px 10px; color: var(--faded); font-size: 13px; overflow-wrap: anywhere; }
-.rows { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-panel); overflow: hidden; }
-.item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; padding: 0 16px; text-align: left; font-size: 15px; }
+.section { margin: 22px 0 8px; font-size: var(--text-head, 16px); font-weight: 600; color: var(--muted); }
+.section button { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 2px; border-radius: var(--r-control); font-weight: inherit; }
+.section button:active { background: var(--button); }
+.section svg { color: var(--muted); }
+.section.shut + .where, .section.shut + .rows { display: none; }   /* (folded away) */
+.section:first-child { margin-top: 6px; }
+.where { margin: -2px 2px 10px 22px; color: var(--faded); font-size: var(--text-small, 14px); overflow-wrap: anywhere; }
+.rows { background: var(--note); border: 1px solid var(--note-row); border-radius: var(--r-panel); overflow: hidden; }
+.item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 16px 0 20px; text-align: left; font-size: var(--text-head, 16px); }
 .item-row { display: flex; align-items: center; }
-.item-row + .item-row, .item-row + .item, .item + .item-row, .item + .item { border-top: 1px solid var(--border); }
+.item-row + .item-row, .item-row + .item, .item + .item-row, .item + .item { border-top: 1px solid var(--note-row); }
 .item-row .item { flex: 1; min-width: 0; }
 .item-row:has(.pin) .item { padding-right: 4px; }
-.item .name { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.item .note { flex: none; font-size: 13px; color: var(--faded); }
+.item .name { flex: 1; min-width: 0; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .note { flex: none; font-size: var(--text-small, 14px); color: var(--faded); }
 .item svg { flex: none; color: var(--muted); }
-.item.folder svg:last-child { color: var(--faded); margin-right: -4px; }
+.item.folder svg:last-child { width: 12px; height: 12px; color: var(--faded); }
 .item.new { color: var(--heading); min-height: 46px; }
 .item.new svg { color: var(--heading); }
 .item:active { background: var(--chosen); }
@@ -137,7 +145,7 @@ svg { display: block; }
 
 /* the canvas to look around */
 .stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
-.viewer { display: block; touch-action: none; }
+.viewer { display: block; touch-action: none; transform-origin: 0 0; will-change: transform; }   /* (slid and scaled while moving: viewer.js look) */
 
 /* ---- a list or a board opened over the tabs ---- */
 #over { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
@@ -148,7 +156,7 @@ svg { display: block; }
 .board-wrap .stage { position: relative; flex: 1; }
 .bar.on-card { background: transparent; border-bottom-color: rgba(127,127,127,.18); }
 .bar.on-card .status { color: inherit; opacity: .65; }
-.sheet { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 22px calc(var(--right) + 20px) calc(var(--bottom) + 48px) calc(var(--left) + 20px); }
+.sheet { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 22px calc(var(--right) + 20px) calc(var(--bottom) + 48px + var(--kb, 0px)) calc(var(--left) + 20px); }   /* (--kb: room for the keyboard, while typing) */
 .sheet .title { margin: 0 0 18px; font: 700 24px/1.25 var(--note); overflow-wrap: anywhere; min-height: 30px; }
 .sheet .title .faint { opacity: .45; }
 .title-edit { display: block; width: 100%; margin: 0 0 18px; padding: 0; border: 0; outline: 0; background: transparent; font: 700 24px/1.25 var(--note); border-bottom: 2px solid var(--accent); }
@@ -216,6 +224,10 @@ svg { display: block; }
 .switch i { position: absolute; left: 4px; top: 4px; width: 20px; height: 20px; border-radius: 4px; background: var(--border); transition: transform .22s cubic-bezier(.2,1.2,.3,1), background .22s; }
 .switch.on i { transform: translateX(18px); background: var(--accent); }
 @media (hover: hover) { .pick:hover { background: var(--chosen); } }
+.themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.theme { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px 8px; border-radius: var(--r-panel); background: var(--c); box-shadow: inset 0 0 0 1px var(--border); font-size: var(--text-small, 14px); color: var(--muted); }
+.theme i { width: 26px; height: 26px; border-radius: 50%; background: var(--a); }
+.theme.on { box-shadow: inset 0 0 0 2px var(--ink); color: var(--ink); }
 .picker .hint { margin: -4px 14px 10px; font-size: 12px; color: var(--muted); }
 .segments { display: flex; gap: 4px; padding: 4px; background: var(--canvas); border-radius: var(--r-panel); }
 .segments button { flex: 1; min-height: 38px; border-radius: var(--r-control); font-size: 14px; font-weight: 500; color: var(--muted); }
@@ -260,3 +272,20 @@ svg { display: block; }
 .edge-mark { position: fixed; left: 0; z-index: 60; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--button); color: var(--ink); box-shadow: var(--menu-shadow); opacity: 0; pointer-events: none; transition: background .12s; }
 .edge-mark.ahead { left: auto; right: 0; }
 .edge-mark.ready { background: var(--accent); color: #fff; }
+
+/* ---- pictures: a grid of them for a folder that is mostly pictures; one looked at, full screen ---- */
+.item .thumb { flex: none; width: 34px; height: 34px; margin-left: -6px; border-radius: var(--r-control); object-fit: cover; background: var(--button); opacity: 0; transition: opacity .2s; }
+.item .thumb.in { opacity: 1; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 4px; margin-top: 12px; }
+.tile { position: relative; aspect-ratio: 1; border-radius: var(--r-tiny, 4px); overflow: hidden; background: var(--note); }
+.tile img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s; }
+.tile img.in { opacity: 1; }
+.tile:active { transform: scale(.97); }
+.photo-view { position: fixed; inset: 0; z-index: 25; display: flex; flex-direction: column; background: #000; }
+.photo-view .bar.on-photo { background: rgba(0,0,0,.55); border-bottom-color: transparent; }
+.photo-view .bar .word { background: var(--accent); color: #fff; }
+.photo-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; display: grid; place-items: center; }
+.photo-stage img { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.photo-count { position: absolute; left: 0; right: 0; bottom: calc(var(--bottom) + 14px); text-align: center; font-size: var(--text-small, 14px); color: rgba(255,255,255,.6); pointer-events: none; }
+.item-row.lifted { position: relative; z-index: 3; background: var(--chosen); box-shadow: 0 10px 28px rgba(0,0,0,.5); }
+.item-row.sliding { transition: transform .15s ease; }

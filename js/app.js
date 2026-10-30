@@ -7,6 +7,7 @@ import * as dbx from "./dropbox.js";
 import * as render from "./render.js";
 import { Viewer, thumbnail } from "./viewer.js";
 import { boardIcons } from "./icons.js";
+import { themes, sizes } from "./look.js";
 
 const app = document.getElementById("app");
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -24,7 +25,7 @@ let canvasView = null, boardView = null;   // the viewers on show
 let undos = [], redos = [];   // what undoes each change (steps), latest last; and what redoes each one undone
 // Where things are, kept in the browser's history (so its back and forward, and a swipe from the edge, go through the
 // folders, projects and lists opened here): { at (how far in), files (the folder on show) | project (its path), open }.
-function here() { const at = history.state && history.state.at || 0; return project ? { at, project: project.path, local: project.local, open: open ? { ...open } : null } : { at, files: folder }; }
+function here() { const at = history.state && history.state.at || 0; return project ? { at, project: project.path, local: project.local, open: open ? { ...open } : null } : { at, files: folder, picture: picture ? picture.path : null }; }
 function furthest() { try { return parseInt(sessionStorage.getItem("canopy.nav") || "0", 10); } catch (e) { return 0; } }
 // Somewhere new: a step on in the history (anything ahead of it gone), then shown. "from": a card it grows from.
 function go(to, from)
@@ -32,7 +33,7 @@ function go(to, from)
     const at = (history.state && history.state.at || 0) + 1;
     history.pushState({ ...to, at }, "");
     try { sessionStorage.setItem("canopy.nav", String(at)); } catch (e) { }
-    arrive(to, from);
+    return arrive(to, from);
 }
 function noted() { history.replaceState(here(), ""); }   // (what is on show now, as the history has it)
 // Shown as a step in the history says (gone back or forward to it, or just stepped to).
@@ -41,10 +42,12 @@ async function arrive(to, from)
     if (!to) to = { files: "" };
     if (to.files !== undefined)
     {
+        const same = !project && folder === to.files && app.querySelector("main.page");   // (the same folder on show: left as it is)
         if (project) leaveProject();
         folder = to.files; remember("canopy.folder", folder);
-        window.scrollTo(0, 0);
-        return showFiles();
+        if (!same) { window.scrollTo(0, 0); showFiles(); }
+        if (to.picture) showPicture(to.picture); else if (picture) closePicture();
+        return;
     }
     if (!project || project.path !== to.project)
     {
@@ -74,6 +77,29 @@ function leaveProject()
 
 function remembered(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
 function remember(key, v) { try { if (v === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch (e) { } }
+
+// ---- the look: one of Canopy Board's themes (its colors as they are there), and its sizes, a little bigger for fingers ----
+
+let theme = remembered("canopy.theme", "Forest");
+function applyTheme(name)
+{
+    if (!themes[name]) name = "Forest";
+    theme = name;
+    const c = themes[name].colors, root = document.documentElement.style, z = sizes;
+    const v = { canvas: c.Canvas, chrome: c.Chrome, card: c.Card, button: c.Button, border: c.Border, ink: c.Ink, muted: c.Muted, heading: c.Heading,
+        accent: c.Accent, "accent-deep": c["Accent deep"], note: c.Note, "note-row": c["Note row"], "note-edge": c["Note edge"], field: c.Field,
+        "field-edge": c["Field edge"], chosen: c.Chosen, faded: c.Faded, notice: c.Notice, guide: c.Guide };
+    for (const k in v) root.setProperty("--" + k, v[k]);
+    // (Board's corners doubled, its type a quarter bigger: what fingers and a phone's distance need)
+    root.setProperty("--r-tiny", z.RTiny * 2 + "px"); root.setProperty("--r-control", z.RControl * 2 + "px");
+    root.setProperty("--r-panel", z.RPanel * 2 + "px"); root.setProperty("--r-pop", z.RPop * 2 + "px");
+    for (const k of ["TextSmall", "TextMain", "TextHead", "TextTitle", "TextPage"]) root.setProperty("--" + k.replace("Text", "text-").toLowerCase(), Math.round(z[k] * 1.25) + "px");
+    root.setProperty("--menu-shadow", "0 " + z.MenuShadowY + "px " + z.MenuShadowBlur + "px rgba(0,0,0," + (z.MenuShadowDark / 255).toFixed(2) + ")");
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", c.Chrome);
+    render.setTheme(c);
+}
+applyTheme(theme);
 
 // ---- feel: a soft click and a tiny buzz as things are done (the sound can be turned off) ----
 
@@ -130,18 +156,8 @@ const feel = {
 
 // ---- small pieces ----
 
-// The few Canopy Board has none of, drawn here as its are (lines 2.667 wide at 24, round ends).
-const icons = {
-    back: '<path d="M15.84 6.48L7.44 12L15.84 17.52Z" fill="currentColor" stroke="currentColor" stroke-width="3.36" stroke-linecap="round" stroke-linejoin="round"/>',
-    tick: '<path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
-    handle: '<path d="M6 9h12M6 15h12" stroke="currentColor" stroke-width="2.667" stroke-linecap="round"/>',
-    saved: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M8.2 12.3l2.6 2.6 5-5.3" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
-    saving: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4" opacity=".25"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
-    waiting: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 7.5v5.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="16.4" r="1.2" fill="currentColor"/>',
-    chevron: '<path d="M8.16 6.48L16.56 12L8.16 17.52Z" fill="currentColor" stroke="currentColor" stroke-width="3.36" stroke-linecap="round" stroke-linejoin="round"/>',
-    forward: '<path d="M8.16 6.48L16.56 12L8.16 17.52Z" fill="currentColor" stroke="currentColor" stroke-width="3.36" stroke-linecap="round" stroke-linejoin="round"/>'
-};
-Object.assign(icons, boardIcons);   // (Canopy Board's own, where it has one)
+// Every icon is one of Canopy Board's own (js/icons.js, written by tools/from-board.py; icons.html shows them).
+const icons = boardIcons;
 function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
 function text(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function bar(title, left, right, cls, titleDoes) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + (titleDoes ? '<button data-do="' + titleDoes + '">' + text(title) + "</button>" : text(title)) + "</h1>" + (right || "") + "</header>"; }
@@ -150,6 +166,13 @@ function iconButton(does, name, label, value, off) { return '<button class="icon
 // Undo and redo, for a bar.
 function undoButtons() { return !project || project.base.doc.readOnly ? "" : iconButton("undo", "undo", "Undo", "", !undos.length) + iconButton("redo", "redo", "Redo", "", !redos.length); }
 
+// Behind the app, the color of whatever is along the bottom of the screen.
+function footColor()
+{
+    const c = themes[theme].colors, l = current();
+    document.documentElement.style.backgroundColor = picture ? "#000" : l ? render.listLook(l).card : project ? (open ? c.Canvas : c.Chrome) : c.Canvas;
+}
+
 // ---- the files ----
 
 let draws = 0;   // how many times a page has been drawn
@@ -157,6 +180,7 @@ function show()
 {
     draws++;
     noted();
+    requestAnimationFrame(footColor);
     const inProject = !!project;
     if (inProject && !document.documentElement.classList.contains("in-project")) window.scrollTo(0, 0);
     document.documentElement.classList.toggle("in-project", inProject);   // (the page behind a project never scrolls)
@@ -188,22 +212,248 @@ async function showFiles()
     app.innerHTML = bar("Canopy Web Viewer", "", arrows + iconButton("account", "more", "Account"), "files-bar", "home")
         + '<main class="page enter">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
-        + (pins.length && folder === "" ? '<h2 class="section">Pinned</h2><div class="rows">' + pins.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
-        + (recent.length && folder === "" ? '<h2 class="section">Recent</h2><div class="rows">' + recent.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
-        + '<h2 class="section">' + (folder === "" ? "Dropbox" : text(folder.split("/").pop())) + "</h2>"
-        + (folder !== "" ? '<div class="where">' + ["Dropbox"].concat(folder.split("/").filter(Boolean)).map(text).join(" / ") + "</div>" : "")
+        + (pins.length && folder === "" ? heading("pinned", "Pinned") + '<div class="rows" id="pinned">' + pins.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
+        + (recent.length && folder === "" ? heading("recent", "Recent") + '<div class="rows">' + recent.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
+        + heading("here", folder === "" ? "Dropbox" : folder.split("/").pop())
+        + (folder !== "" && !folded().includes("here") ? '<div class="where">' + ["Dropbox"].concat(folder.split("/").filter(Boolean)).map(text).join(" / ") + "</div>" : "")
         + '<div class="rows" id="items"><div class="empty">Loading…</div></div>'
         + '<input class="hidden-input" type="file" id="picker"></main>';
     wire();
+    arrangePins();
     let items;
     try { items = await dbx.list(folder); }
     catch (e) { return failed(e); }
     const holder = document.getElementById("items");
     if (!holder || project) return;
-    holder.innerHTML = items.map(i => item(i.folder ? "folder" : "file", i.folder ? i.name : fileName(i.name), i.folder ? "" : when(i.modified), i.folder ? "into" : "open", i.path)).join("")
-        + (items.length === 0 ? '<div class="empty">No folders or projects here</div>' : "")
+    shownItems = items;
+    const pics = items.filter(i => i.picture), rest = items.filter(i => !i.picture), grid = pics.length >= 6 && pics.length >= items.length * 0.6;
+    holder.innerHTML = (grid ? rest : items).map(i => i.picture ? item("picture", i.name, when(i.modified), "picture", i.path)
+            : item(i.folder ? "folder" : "file", i.folder ? i.name : fileName(i.name), i.folder ? "" : when(i.modified), i.folder ? "into" : "open", i.path)).join("")
+        + (items.length === 0 ? '<div class="empty">No folders, projects or pictures here</div>' : "")
         + '<button class="item new" data-do="newproject">' + icon("plus", 18) + '<span class="name">New project here</span></button>';
+    if (grid) holder.insertAdjacentHTML("afterend", '<div class="tiles">' + pics.map(i => '<button class="tile" data-do="picture" data-value="' + text(i.path) + '" aria-label="' + text(i.name) + '"><img alt=""></button>').join("") + "</div>");
     wire(holder);
+    if (grid) wire(holder.nextElementSibling);
+    thumbs(app);
+}
+// The pinned projects put in order: one held down, then dragged up or down, the others moving out of its way.
+function arrangePins()
+{
+    const box = app.querySelector("#pinned");
+    if (!box) return;
+    box.querySelectorAll(".item-row").forEach(row =>
+    {
+        let timer = null, x0 = 0, y0 = 0;
+        const open = row.querySelector(".item");
+        row.addEventListener("pointerdown", e =>
+        {
+            if (e.target.closest(".pin") || e.button > 0) return;
+            x0 = e.clientX; y0 = e.clientY;
+            timer = setTimeout(() => { timer = null; lift(e); }, 420);
+        });
+        const stop = () => { if (timer) clearTimeout(timer); timer = null; };
+        row.addEventListener("pointermove", e => { if (timer && Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 8) stop(); });
+        row.addEventListener("pointerup", stop);
+        row.addEventListener("pointercancel", stop);
+        row.addEventListener("contextmenu", e => e.preventDefault());
+        open.addEventListener("click", e => { if (row.dataset.held) { e.stopPropagation(); e.preventDefault(); delete row.dataset.held; } }, true);
+        function lift(e)
+        {
+            row.dataset.held = "1";
+            feel.hold();
+            const all = [...box.querySelectorAll(".item-row")], from = all.indexOf(row), h = row.offsetHeight;
+            const mids = all.map(o => { const r = o.getBoundingClientRect(); return r.top + r.height / 2; }), start = e.clientY;
+            let to = from;
+            row.classList.add("lifted");
+            const noScroll = ev => ev.preventDefault();
+            document.addEventListener("touchmove", noScroll, { passive: false });
+            const move = ev =>
+            {
+                const dy = ev.clientY - start, mid = mids[from] + dy;
+                row.style.transform = "translateY(" + dy + "px)";
+                let now = 0;
+                all.forEach((o, i) => { if (o !== row && mids[i] < mid) now++; });
+                if (now !== to) { to = now; buzz(4); }
+                all.forEach((o, i) => { if (o === row) return; o.classList.add("sliding"); o.style.transform = i > from && i <= to ? "translateY(" + -h + "px)" : i < from && i >= to ? "translateY(" + h + "px)" : ""; });
+            };
+            const drop = () =>
+            {
+                document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", drop); document.removeEventListener("pointercancel", drop);
+                document.removeEventListener("touchmove", noScroll);
+                const pins = remembered("canopy.pinned", []), path = open.dataset.value;
+                if (to !== from) { const order = pins.filter(p => p !== path); order.splice(to, 0, path); remember("canopy.pinned", order); feel.drop(); }
+                setTimeout(() => { delete row.dataset.held; showFiles(); }, 40);
+            };
+            document.addEventListener("pointermove", move); document.addEventListener("pointerup", drop); document.addEventListener("pointercancel", drop);
+        }
+    });
+}
+// Pictures' previews, fetched as they come into view (Dropbox makes them, a few dozen at a time).
+let shownItems = [];
+const thumbCache = new Map();
+function thumbs(root)
+{
+    const want = [], seen = new IntersectionObserver(es =>
+    {
+        for (const e of es) if (e.isIntersecting) { seen.unobserve(e.target); want.push(e.target); }
+        clearTimeout(thumbs.t);
+        thumbs.t = setTimeout(async () =>
+        {
+            const batch = want.splice(0), paths = batch.map(el => el.closest("[data-value]").dataset.value).filter(p => !thumbCache.has(p));
+            try { if (paths.length) for (const [p, url] of await dbx.thumbnails(paths)) thumbCache.set(p, url); } catch (x) { }
+            for (const el of batch) { const url = thumbCache.get(el.closest("[data-value]").dataset.value); if (url) { el.src = url; el.classList.add("in"); } }
+        }, 60);
+    }, { rootMargin: "300px" });
+    root.querySelectorAll(".tile img, .item .thumb").forEach(img => seen.observe(img));
+}
+let picture = null;   // the picture open over the files: { path, el, url }
+function showPicture(path)
+{
+    if (picture && !app.contains(picture.el)) picture = null;   // (drawn over meanwhile)
+    const pics = shownItems.filter(i => i.picture);
+    if (!picture)
+    {
+        const el = element('<div class="photo-view"><div class="photo-head"></div><div class="photo-stage"><img alt=""></div><div class="photo-count"></div></div>');
+        app.appendChild(el);
+        picture = { path, el, url: null, s: 1, x: 0, y: 0 };
+        handlePhoto(picture);
+        if (!calm) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
+    }
+    const p = picture, it = pics.find(i => i.path === path), at = pics.findIndex(i => i.path === path);
+    p.path = path; p.s = 1; p.x = 0; p.y = 0;
+    p.el.querySelector(".photo-head").innerHTML = bar(it ? it.name : path.split("/").pop(), iconButton("closepicture", "back", "Back"), '<button class="word" data-do="addpicture">Add to canvas</button>', "on-photo");
+    wire(p.el.querySelector(".photo-head"));
+    footColor();
+    p.el.querySelector(".photo-count").textContent = pics.length > 1 && at >= 0 ? at + 1 + " of " + pics.length : "";
+    const img = p.el.querySelector("img");
+    img.style.transform = "";
+    img.src = thumbCache.get(path) || "";   // (its small preview first, while the big one comes)
+    if (p.url) { URL.revokeObjectURL(p.url); p.url = null; }
+    dbx.preview(path).then(b => { if (picture !== p || p.path !== path) return; p.url = URL.createObjectURL(b); img.src = p.url; }).catch(e => toast(e.message));
+}
+function closePicture()
+{
+    const p = picture;
+    if (!p) return;
+    picture = null;
+    p.el.style.pointerEvents = "none";   // (going: taps go to what is under it)
+    const gone = () => { p.el.remove(); if (p.url) URL.revokeObjectURL(p.url); footColor(); };
+    if (calm) gone(); else p.el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 140 }).onfinish = gone;
+}
+// The next or last picture of the folder (as the history's place: going back closes the picture, not each one seen).
+function nextPicture(by)
+{
+    const pics = shownItems.filter(i => i.picture), at = pics.findIndex(i => i.path === picture.path), to = pics[at + by];
+    if (!to) { if (!calm) picture.el.querySelector("img").animate([{ transform: "translateX(" + -by * 24 + "px)" }, { transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,1.2,.3,1)" }); return; }
+    history.replaceState({ ...history.state, picture: to.path }, "");
+    showPicture(to.path);
+    if (!calm) picture.el.querySelector("img").animate([{ transform: "translateX(" + by * 60 + "px)", opacity: 0.3 }, { transform: "none", opacity: 1 }], { duration: 220, easing: "cubic-bezier(.2,.9,.3,1)" });
+}
+function handlePhoto(p)
+{
+    const stage = p.el.querySelector(".photo-stage"), img = () => stage.querySelector("img");
+    const pts = new Map();
+    let start = null, lastTap = 0;
+    const put = () => { img().style.transform = "translate(" + p.x + "px," + p.y + "px) scale(" + p.s + ")"; };
+    stage.addEventListener("pointerdown", e =>
+    {
+        stage.setPointerCapture(e.pointerId);
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const all = [...pts.values()];
+        start = { s: p.s, x: p.x, y: p.y, pts: all.map(o => ({ ...o })), t: performance.now() };
+    });
+    stage.addEventListener("pointermove", e =>
+    {
+        if (!pts.has(e.pointerId) || !start) return;
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const all = [...pts.values()];
+        if (all.length >= 2 && start.pts.length >= 2)
+        {
+            const d0 = Math.hypot(start.pts[0].x - start.pts[1].x, start.pts[0].y - start.pts[1].y), d1 = Math.hypot(all[0].x - all[1].x, all[0].y - all[1].y);
+            const m0 = { x: (start.pts[0].x + start.pts[1].x) / 2, y: (start.pts[0].y + start.pts[1].y) / 2 }, m1 = { x: (all[0].x + all[1].x) / 2, y: (all[0].y + all[1].y) / 2 };
+            const r = stage.getBoundingClientRect(), cx = m0.x - r.left - r.width / 2, cy = m0.y - r.top - r.height / 2;
+            const s = Math.max(1, Math.min(8, start.s * d1 / Math.max(1, d0))), k = s / start.s;
+            p.s = s; p.x = cx - (cx - start.x) * k + (m1.x - m0.x); p.y = cy - (cy - start.y) * k + (m1.y - m0.y);
+        }
+        else if (all.length === 1)
+        {
+            const dx = all[0].x - start.pts[0].x, dy = all[0].y - start.pts[0].y;
+            if (p.s > 1.01) { p.x = start.x + dx; p.y = start.y + dy; }
+            else { p.x = dx; p.y = 0; }   // (not zoomed: it slides, to be swiped on)
+        }
+        put();
+    });
+    const up = e =>
+    {
+        if (!pts.has(e.pointerId)) return;
+        const was = start, wasPts = pts.size;
+        pts.delete(e.pointerId);
+        if (pts.size) { const all = [...pts.values()]; start = { s: p.s, x: p.x, y: p.y, pts: all.map(o => ({ ...o })), t: performance.now() }; return; }
+        start = null;
+        if (!was) return;
+        const moved = Math.hypot(e.clientX - was.pts[0].x, e.clientY - was.pts[0].y);
+        if (wasPts === 1 && moved < 8 && performance.now() - was.t < 300)
+        {
+            // A double tap: in closer there, or back out.
+            const now = performance.now();
+            if (now - lastTap < 300)
+            {
+                lastTap = 0;
+                const r = stage.getBoundingClientRect(), cx = e.clientX - r.left - r.width / 2, cy = e.clientY - r.top - r.height / 2;
+                if (p.s > 1.01) { p.s = 1; p.x = 0; p.y = 0; } else { p.s = 2.5; p.x = -cx * 1.5; p.y = -cy * 1.5; }
+                img().style.transition = "transform .25s cubic-bezier(.2,.9,.3,1)"; put(); setTimeout(() => { img().style.transition = ""; }, 260);
+                return;
+            }
+            lastTap = now;
+            return;
+        }
+        if (p.s <= 1.01)
+        {
+            // A swipe: on to the next (or last) one; not far enough, back where it was.
+            if (Math.abs(p.x) > 70) { const by = p.x < 0 ? 1 : -1; p.x = 0; nextPicture(by); return; }
+            p.s = 1; p.x = 0; p.y = 0;
+            img().style.transition = "transform .2s cubic-bezier(.2,1.2,.3,1)"; put(); setTimeout(() => { img().style.transition = ""; }, 220);
+        }
+    };
+    stage.addEventListener("pointerup", up);
+    stage.addEventListener("pointercancel", up);
+}
+
+// "Add to canvas": which project (pinned, lately opened, this folder's), opened, and then where in it: the canvas, or
+// one of its boards; the picture (as Dropbox makes it, at most 2048 across) placed there, picked, to be put right.
+function addPicture()
+{
+    if (!picture) return;
+    const path = picture.path, name = path.split("/").pop();
+    const projects = [...new Set([...remembered("canopy.pinned", []), ...remembered("canopy.recent", []), ...shownItems.filter(i => !i.folder && !i.picture).map(i => i.path)])];
+    if (!projects.length) { toast("No projects to add it to yet"); return; }
+    const build = () => '<div class="ptitle">Add to which project?</div><div class="scroll">' + projects.map(r => '<button class="pick" data-do="to" data-value="' + text(r) + '"><span>' + text(fileName(r)) + '</span><span class="kind-name">' + text(r.split("/").slice(-2, -1)[0] || "Dropbox") + "</span></button>").join("") + "</div>";
+    sheetUp(build, async (does, value, close) =>
+    {
+        if (does !== "to") return;
+        close(() => { });
+        let blob;
+        try { blob = await dbx.preview(path); }
+        catch (e) { toast(e.message); return; }
+        const file = new File([blob], name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+        closePicture();
+        await go({ project: value });
+        if (!project || project.path !== value) return;
+        if (project.base.doc.readOnly) { toast("This project can't be changed here"); return; }
+        const boards = project.scene.boards;
+        if (!boards.length) { tab = "canvas"; remember("canopy.tab", tab); show(); addPhoto(file); return; }
+        sheetUp(() => '<div class="ptitle">Put it on…</div><div class="scroll"><button class="pick" data-do="on" data-value=""><span>The canvas</span>' + icon("canvas", 18) + "</button>"
+            + '<div class="section">Boards</div>' + boards.map(b => '<button class="pick" data-do="on" data-value="' + text(b.id) + '"><span>' + text(b.name) + "</span></button>").join("") + "</div>",
+            (d, id, shut) => { if (d !== "on") return; shut(() => { if (id) openBoard(id, null); else { tab = "canvas"; remember("canopy.tab", tab); show(); } addPhoto(file); }); });
+    });
+}
+
+// A heading as the desktop app's are: its words, after the arrow that folds what is under it away (and back).
+function folded() { return remembered("canopy.folded", []); }
+function heading(key, words)
+{
+    const shut = folded().includes(key);
+    return '<h2 class="section' + (shut ? " shut" : "") + '"><button data-do="fold" data-value="' + key + '" aria-expanded="' + !shut + '">' + icon(shut ? "chevron" : "open", 12) + "<span>" + text(words) + "</span></button></h2>";
 }
 // A row as the desktop app's project lists have them: the name, a faded note at the right (when it was saved, or where it
 // is); a folder marked as one, and goes on into it; a project can be pinned.
@@ -211,7 +461,7 @@ function item(kind, name, note, does, value)
 {
     const pinned = kind === "file" && remembered("canopy.pinned", []).includes(value);
     return '<div class="item-row"><button class="item' + (kind === "folder" ? " folder" : "") + '" data-do="' + does + '" data-value="' + text(value) + '">'
-        + (kind === "folder" ? icon("folder", 18) : "") + '<span class="name">' + text(name) + "</span>"
+        + (kind === "folder" ? icon("folder", 18) : kind === "picture" ? '<img class="thumb" alt="">' : "") + '<span class="name">' + text(name) + "</span>"
         + (note ? '<span class="note">' + text(note) + "</span>" : "") + (kind === "folder" ? icon("chevron", 16) : "") + "</button>"
         + (kind === "file" ? '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to the top") + '" title="' + (pinned ? "Unpin" : "Pin to the top") + '">' + icon("pin", 16) + "</button>" : "") + "</div>";
 }
@@ -335,25 +585,25 @@ function arrangeCards(holder, cards)
         Object.assign(ghost.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px" });
         document.body.appendChild(ghost);
         el.classList.add("gap");
-        let order = cards.slice(), dx = e.clientX - r.left, dy = e.clientY - r.top, px = e.clientX, py = e.clientY, scroll = 0;
+        let order = cards.slice(), dx = e.clientX - r.left, dy = e.clientY - r.top, px = e.clientX, py = e.clientY, scroll = 0, settling = 0;
         const noScroll = ev => ev.preventDefault();
         document.addEventListener("touchmove", noScroll, { passive: false });
         const place = () =>
         {
             ghost.style.transform = "translate(" + (px - dx - r.left) + "px," + (py - dy - r.top) + "px) scale(1.04) rotate(-1deg)";
-            // Where it would go: before whichever card's middle the finger is above, in reading order of the columns.
-            const others = order.filter(o => o !== c);
-            let best = null, bestD = Infinity;
-            for (const o of others)
-            {
-                const b = o.el.getBoundingClientRect();
-                const d = Math.hypot(px - (b.left + b.width / 2), py - (b.top + b.height / 2));
-                if (d < bestD) { bestD = d; best = { o, b }; }
-            }
-            if (!best) return;
-            const at = others.indexOf(best.o) + (py > best.b.top + best.b.height / 2 ? 1 : 0);
-            const now = others.slice(0, at).concat([c], others.slice(at));
-            if (now.some((o, i) => o !== order[i])) { order = now; relayout(); }
+            // Where it would go: only once the finger is over another card (not the gap, not between cards), and past
+            // that card's middle the way it is going: before it, coming from below or the right; after it, from above
+            // or the left. Never while the cards are still sliding into their places from the last move (or the card
+            // just moved would move straight back: two cards swapping back and forth).
+            if (performance.now() < settling) return;
+            const at = order.indexOf(c), over = order.find(o => { if (o === c) return false; const b = o.el.getBoundingClientRect(); return px >= b.left && px <= b.right && py >= b.top && py <= b.bottom; });
+            if (!over) return;
+            const b = over.el.getBoundingClientRect(), to = order.indexOf(over), mid = b.top + b.height / 2;
+            const before = at > to;   // (it is after that card now: it goes before it once above that card's middle)
+            if (before ? py > mid : py < mid) return;
+            const now = order.filter(o => o !== c);
+            now.splice(now.indexOf(over) + (before ? 0 : 1), 0, c);
+            if (now.some((o, i) => o !== order[i])) { order = now; relayout(); settling = performance.now() + 240; }
         };
         const relayout = () =>
         {
@@ -508,17 +758,18 @@ function drawPicked(v, ctx)
     if (lifted)
     {
         ctx.save(); ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
-        ctx.strokeStyle = "rgba(95,211,155,.6)"; ctx.lineWidth = 3; ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
+        ctx.strokeStyle = themes[theme].colors.Heading; ctx.globalAlpha = 0.6; ctx.lineWidth = 3; ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
         ctx.restore();
     }
-    ctx.strokeStyle = pickedLocked() ? "#A5A8A7" : "#5fd39b"; ctx.lineWidth = 1.5;
+    const tone = themes[theme].colors;
+    ctx.strokeStyle = pickedLocked() ? tone.Muted : tone.Heading; ctx.lineWidth = 1.5;
     ctx.setLineDash(pickedLocked() ? [5, 4] : []);
     ctx.strokeRect(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5, Math.round(c.x - a.x), Math.round(c.y - a.y));
     if (pickedLocked()) return;   // (locked: no handles)
     for (const h of corners(v))
     {
         ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(h.x, h.y, lifted ? 9 : 7, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "#428C6A"; ctx.lineWidth = 2; ctx.stroke();
+        ctx.strokeStyle = tone.Accent; ctx.lineWidth = 2; ctx.stroke();
     }
 }
 // Whether what is picked is locked (any of it: itself, or a group or layer it is in).
@@ -717,8 +968,10 @@ function showList(over)
     if (ta)
     {
         if (ta.tagName === "TEXTAREA") growArea(ta);
-        ta.focus();
+        ta.focus({ preventScroll: true });
         const n = ta.value.length; ta.setSelectionRange(n, n);
+        keepInView();
+        setTimeout(keepInView, 350);   // (once the keyboard is up)
     }
 }
 
@@ -750,6 +1003,19 @@ function draft(c)   // a new entry being typed, not in the list until it has wor
         + '<textarea rows="1" data-fresh="1" placeholder="' + (k === "H" ? "Heading" : "New task") + '"></textarea></div>';
 }
 function growArea(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
+// What is being typed in, kept in sight above the keyboard: the list given room below for the keyboard, and scrolled
+// to just above it (the screen the keyboard leaves is the phone's "visual viewport").
+function keepInView()
+{
+    const ta = app.querySelector("#over textarea, #over input.title-edit"), sheet = app.querySelector("#over .sheet");
+    if (!ta || !sheet) return;
+    const vv = window.visualViewport, bottom = vv ? vv.offsetTop + vv.height : innerHeight, under = Math.max(0, innerHeight - bottom);
+    sheet.style.setProperty("--kb", under + "px");
+    const row = ta.closest(".entry") || ta, r = row.getBoundingClientRect(), top = sheet.getBoundingClientRect().top;
+    if (r.bottom > bottom - 16) sheet.scrollBy({ top: r.bottom - bottom + 24, behavior: calm ? "auto" : "smooth" });
+    else if (r.top < top + 8) sheet.scrollBy({ top: r.top - top - 16, behavior: calm ? "auto" : "smooth" });
+}
+if (window.visualViewport) visualViewport.addEventListener("resize", () => { if (app.querySelector("#over textarea, #over input.title-edit")) keepInView(); else { const sh = app.querySelector("#over .sheet"); if (sh) sh.style.removeProperty("--kb"); } });
 
 function showBoard(over)
 {
@@ -1493,12 +1759,15 @@ function follow(id)
 function accountMenu()
 {
     const build = () => '<div class="ptitle">' + (dbx.who() ? "Signed in as " + text(dbx.who()) : "Signed in to Dropbox") + "</div>"
+        + '<div class="section first">Theme</div><div class="themes">' + Object.keys(themes).map(n => '<button class="theme' + (n === theme ? " on" : "") + '" data-do="theme" data-value="' + n + '" style="--a:' + themes[n].colors.Accent + ";--c:" + themes[n].colors.Card + '"><i></i><span>' + n + "</span></button>").join("") + "</div>"
+        + '<div class="section">Other</div>'
         + '<button class="pick" data-do="sound" role="switch" aria-checked="' + sound + '"><span>Sounds</span><span class="switch' + (sound ? " on" : "") + '"><i></i></span></button>'
         + '<button class="pick" data-do="local"><span>Open a project from this phone</span></button>'
         + '<div class="hint">Changes to a project opened from the phone stay on it until you save a copy.</div>'
         + '<button class="pick danger" data-do="signout"><span>Sign out</span></button>';
     sheetUp(build, (does, value, close, again) =>
     {
+        if (does === "theme") { applyTheme(value); remember("canopy.theme", value); click(1100, true); again(); return; }
         if (does === "sound")
         {
             // (flipped where it is, so it slides)
@@ -1523,7 +1792,7 @@ function wire(root)
     const ta = scope.querySelector("textarea, input.title-edit");
     if (ta)
     {
-        if (ta.tagName === "TEXTAREA") ta.addEventListener("input", () => growArea(ta));
+        if (ta.tagName === "TEXTAREA") ta.addEventListener("input", () => { growArea(ta); keepInView(); });
         ta.addEventListener("keydown", keyDown);
         ta.addEventListener("blur", () =>
         {
@@ -1543,6 +1812,10 @@ function act(what, value, ev, el)
     {
         case "signin": dbx.signIn(); break;
         case "account": accountMenu(); break;
+        case "picture": go({ files: folder, picture: value }); break;
+        case "closepicture": goBack(); break;
+        case "addpicture": addPicture(); break;
+        case "fold": { const f = folded(); remember("canopy.folded", f.includes(value) ? f.filter(k => k !== value) : [...f, value]); showFiles(); break; }
         case "home": if (folder !== "") go({ files: "" }); else { window.scrollTo({ top: 0, behavior: "smooth" }); } break;
         case "back": goBack(); break;
         case "ahead": history.forward(); break;
@@ -1607,6 +1880,11 @@ function act(what, value, ev, el)
 
 document.addEventListener("keydown", e =>
 {
+    if (picture && !sheetOpen())
+    {
+        if (e.key === "Escape") { e.preventDefault(); goBack(); return; }
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); nextPicture(e.key === "ArrowRight" ? 1 : -1); return; }
+    }
     if (!(e.ctrlKey || e.metaKey) || e.altKey || !project) return;
     if (e.target.closest && e.target.closest("textarea, input")) return;   // (typing: the box's own undo)
     const k = e.key.toLowerCase();
@@ -1618,6 +1896,9 @@ document.addEventListener("keydown", e =>
 // from the right edge forward, as a browser's would; an arrow comes in with the finger, and it goes once past it ----
 
 const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+document.documentElement.classList.toggle("standalone", standalone);
+let popped = 0;   // when the history last moved (by the phone's own swipe, say)
+window.addEventListener("popstate", () => { popped = performance.now(); }, true);
 if (standalone)
 {
     let edge = null;
@@ -1628,7 +1909,7 @@ if (standalone)
         const fromLeft = t.clientX < 22, fromRight = t.clientX > innerWidth - 22;
         if (!fromLeft && !fromRight) return;
         if (fromRight && (history.state && history.state.at || 0) >= furthest()) return;   // (nothing ahead)
-        edge = { x0: t.clientX, y0: t.clientY, back: fromLeft, on: false, mark: null };
+        edge = { x0: t.clientX, y0: t.clientY, back: fromLeft, on: false, mark: null, t: performance.now() };
     }, { passive: true });
     document.addEventListener("touchmove", e =>
     {
@@ -1654,7 +1935,8 @@ if (standalone)
         if (!edge) return;
         const e = edge; edge = null;
         if (e.mark) { e.mark.style.transition = "opacity .15s"; e.mark.style.opacity = "0"; setTimeout(() => e.mark.remove(), 160); }
-        if (e.ready) { if (e.back) goBack(); else history.forward(); }
+        // (the phone's own swipe went back already, as some do on a home screen: not again)
+        if (e.ready && popped < e.t) { if (e.back) goBack(); else history.forward(); }
     };
     document.addEventListener("touchend", lift);
     document.addEventListener("touchcancel", lift);

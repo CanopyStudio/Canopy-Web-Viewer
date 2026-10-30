@@ -40,6 +40,20 @@ export class Viewer
     }
 
     moving() { this.movingUntil = performance.now() + 140; }
+    // Moved (dragged, pinched, glided): what was drawn last slid and scaled to where it now is, on the screen itself
+    // (which a phone does smoothly however much is drawn), and drawn again only once that has gone stale (zoomed well
+    // in or out, or slid well along: blank showing at its edges), or the moving stops.
+    look()
+    {
+        const d = this.drawn;
+        if (!d || this.quick === false) { this.moving(); return this.redraw(); }
+        const c = this.cam, k = c.s / d.s, ox = c.tx - d.tx * k, oy = c.ty - d.ty * k;
+        this.canvas.style.transform = "matrix(" + k + ",0,0," + k + "," + ox + "," + oy + ")";
+        const stale = k > 1.6 || k < 0.62 || Math.abs(ox + (k - 1) * this.w / 2) > this.w * 0.35 || Math.abs(oy + (k - 1) * this.h / 2) > this.h * 0.35;
+        if (stale) { this.moving(); this.redraw(); }
+        clearTimeout(this.still);
+        this.still = setTimeout(() => this.redraw(), 120);   // (stopped: drawn well)
+    }
     redraw()
     {
         if (this.queued) return;
@@ -52,6 +66,9 @@ export class Viewer
             // (moving: pictures scaled quickly; drawn well again once it stops)
             const fast = performance.now() < this.movingUntil;
             render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
+            this.drawn = { ...this.cam };
+            this.canvas.style.transform = "";
+            this.host.style.background = sc.doc.canvas;   // (what shows round it, while it is slid along)
             clearTimeout(this.sharpen);
             if (fast) this.sharpen = setTimeout(() => this.redraw(), 160);
             if (this.overlay) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
@@ -78,8 +95,7 @@ export class Viewer
             const fx = (this.w / 2 - from.tx) / from.s, fy = (this.h / 2 - from.ty) / from.s, gx = (this.w / 2 - to.tx) / to.s, gy = (this.h / 2 - to.ty) / to.s;
             const cx = fx + (gx - fx) * k, cy = fy + (gy - fy) * k;
             this.cam = { s, tx: this.w / 2 - cx * s, ty: this.h / 2 - cy * s };
-            this.moving(); this.redraw();
-            if (u < 1) requestAnimationFrame(step);
+            if (u < 1) { this.look(); requestAnimationFrame(step); } else this.redraw();
         };
         requestAnimationFrame(step);
     }
@@ -93,7 +109,7 @@ export class Viewer
         const s = Math.max(0.01, Math.min(64, this.cam.s * k));
         k = s / this.cam.s;
         this.cam = { s, tx: px - (px - this.cam.tx) * k, ty: py - (py - this.cam.ty) * k };
-        this.moving(); this.redraw();
+        this.look();
     }
 
     at(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
@@ -122,7 +138,7 @@ export class Viewer
         {
             this.cam.tx += now.x - was.x; this.cam.ty += now.y - was.y;
             this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y);
-            this.moving(); this.redraw();
+            this.look();
         }
         else if (this.pointers.size === 2 && this.pinch)
         {
@@ -139,6 +155,7 @@ export class Viewer
         const p = this.pointers.get(e.pointerId);
         this.pointers.delete(e.pointerId);
         if (this.pointers.size < 2) this.pinch = null;
+        if (this.pointers.size === 0 && this.drawn && this.canvas.style.transform) { clearTimeout(this.still); this.redraw(); }   // (let go: drawn well, where it is)
         if (this.held && this.pointers.size === 0) { const h = this.held; this.held = null; h.end(); if (this.moved > 10) return; }
         if (this.pointers.size > 0 || this.moved > 10 || performance.now() - this.downAt > 400) return;
         const now = performance.now();
@@ -160,7 +177,7 @@ export class Viewer
         e.preventDefault();
         const p = this.at(e);
         if (e.ctrlKey || e.metaKey) this.zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.01));
-        else { this.cam.tx -= e.deltaX; this.cam.ty -= e.deltaY; this.moving(); this.redraw(); }
+        else { this.cam.tx -= e.deltaX; this.cam.ty -= e.deltaY; this.look(); }
     }
 }
 

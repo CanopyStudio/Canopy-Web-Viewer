@@ -96,16 +96,41 @@ async function rpc(name, body)
     return await r.json();
 }
 
-// A folder's folders and .cnpy files ("" is the top), folders first, each by name.
+// Pictures Dropbox can show a preview of (made by Dropbox, so even a phone's HEIC photos show).
+export const PICTURE = /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp)$/i;
+// A folder's folders, .cnpy files and pictures ("" is the top), folders first, each by name.
 export async function list(path)
 {
     let page = await rpc("files/list_folder", { path, include_non_downloadable_files: false });
     const all = page.entries.slice();
     while (page.has_more) { page = await rpc("files/list_folder/continue", { cursor: page.cursor }); all.push(...page.entries); }
     return all
-        .filter(e => e[".tag"] === "folder" || /\.cnpy$/i.test(e.name))
-        .map(e => ({ folder: e[".tag"] === "folder", name: e.name, path: e.path_display, modified: e.server_modified }))
+        .filter(e => e[".tag"] === "folder" || /\.cnpy$/i.test(e.name) || PICTURE.test(e.name))
+        .map(e => ({ folder: e[".tag"] === "folder", picture: e[".tag"] !== "folder" && PICTURE.test(e.name), name: e.name, path: e.path_display, modified: e.server_modified }))
         .sort((a, b) => (b.folder - a.folder) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+// Small previews of pictures, as Dropbox makes them (25 at a time): path → a data URL, for those it could make.
+export async function thumbnails(paths, size)
+{
+    const out = new Map();
+    for (let i = 0; i < paths.length; i += 25)
+    {
+        const r = await fetch(CONTENT + "files/get_thumbnail_batch", { method: "POST", headers: await headers({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ entries: paths.slice(i, i + 25).map(path => ({ path, format: "jpeg", size: size || "w256h256", mode: "fitone_bestfit" })) }) });
+        if (r.status === 401) { keep(null); throw new SignedOut(); }
+        if (!r.ok) continue;
+        for (const e of (await r.json()).entries) if (e[".tag"] === "success") out.set(e.metadata.path_display, "data:image/jpeg;base64," + e.thumbnail);
+    }
+    return out;
+}
+// A picture big enough to look at (or put on a canvas), as Dropbox makes it: a JPEG at most 2048 across.
+export async function preview(path)
+{
+    const r = await fetch(CONTENT + "files/get_thumbnail_v2", { method: "POST", headers: await headers({ "Dropbox-API-Arg": arg({ resource: { ".tag": "path", path }, format: "jpeg", size: "w2048h1536", mode: "fitone_bestfit" }) }) });
+    if (r.status === 401) { keep(null); throw new SignedOut(); }
+    if (!r.ok) throw new Error("Couldn't show that picture (" + r.status + ").");
+    return await r.blob();
 }
 
 // A file's bytes and which version they are.
