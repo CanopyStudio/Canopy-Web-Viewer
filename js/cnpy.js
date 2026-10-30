@@ -188,7 +188,7 @@ export function lockers(doc, o, view) { return !o.group || doc.locks.size === 0 
 
 // An object moved so (a copy, for drawing).
 // A list's width: every list is this wide, at its own scale (1), growing only downward as it fills.
-export const LIST_W = 360;
+export const LIST_W = 384;
 export function placed(o, t)
 {
     const q = { ...o }, X = v => v * t.k + t.ox, Y = v => v * t.k + t.oy;
