@@ -276,7 +276,7 @@ function showCanvas(holder, fresh)
     {
         closeViewers();
         holder.innerHTML = '<div class="stage"></div>';
-        canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, f => project && project.get(f), null);
+        canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, (f, want) => project && project.get(f, want), null);
         editable(canvasView);
         canvasView.onFitAll = () => fitAll(true);
         if (location.hostname === "localhost") window.__view = () => canvasView;   // (for checking it on this computer)
@@ -597,7 +597,7 @@ function showBoard(over)
     {
         over.innerHTML = '<div class="board-wrap" data-id="' + text(b.id) + '"><div class="head"></div><div class="stage fade-in"></div></div>';
         wrap = over.querySelector(".board-wrap");
-        boardView = new Viewer(wrap.querySelector(".stage"), () => project && project.scene, f => project && project.get(f), null);
+        boardView = new Viewer(wrap.querySelector(".stage"), () => project && project.scene, (f, want) => project && project.get(f, want), null);
         editable(boardView);
         boardView.onFitAll = () => boardView.fit(b, 0.04, true);
         boardView.fit(b, 0.04, false);
@@ -732,7 +732,7 @@ async function save()
 async function rebase(p, bytes, rev)
 {
     p.base = { doc: await cnpy.open(bytes), rev };
-    p.get = render.pictures(p.base.doc, p.pictures, onPicture);
+    p.get = render.pictures(p.base.doc, p.pictures, onPicture, p.cache);
 }
 function onPicture() { redrawViewers(); if (tab === "boards" && project && !open) { clearTimeout(onPicture.t); onPicture.t = setTimeout(drawThumbs, 60); } }
 
@@ -805,7 +805,7 @@ async function addPhoto(file)
     await keepPhoto(name, bytes);
     const layer = cnpy.topLayer(project.base.doc);
     step({ t: "photo", id, list: null, photo: { file: name, x: area.x + (area.w - w) / 2, y: area.y + (area.h - h) / 2, w, h, pw, ph, name: "Photo", layer, author: dbx.who() } });
-    project.get = render.pictures(project.base.doc, project.pictures, onPicture);
+    project.get = render.pictures(project.base.doc, project.pictures, onPicture, project.cache);
     if (!open && tab !== "canvas") { tab = "canvas"; remember("canopy.tab", tab); show(); }
     const v = open && open.kind === "board" ? boardView : canvasView;
     if (v) pick({ ids: [id], list: null }, v);   // (picked, to be moved and sized where it belongs)
@@ -860,9 +860,10 @@ async function openPath(path)
         const got = await dbx.read(path);
         const doc = await cnpy.open(got.bytes);
         const waiting = remembered("canopy.steps." + path, null) || [];   // changes made here that never got saved: done again
-        project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, pictures: new Map() };
+        if (project) render.forget(project.cache);
+        project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, pictures: new Map(), cache: render.cache() };
         undos = []; redos = [];
-        project.get = render.pictures(doc, project.pictures, onPicture);
+        project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         await photosReady(project);
         refreshView();
         remember("canopy.recent", [path, ...remembered("canopy.recent", []).filter(r => r !== path)].slice(0, 5));
@@ -880,9 +881,10 @@ async function openLocal(file)
     try
     {
         const doc = await cnpy.open(new Uint8Array(await file.arrayBuffer()));
-        project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map() };
+        if (project) render.forget(project.cache);
+        project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map(), cache: render.cache() };
         undos = []; redos = [];
-        project.get = render.pictures(doc, project.pictures, onPicture);
+        project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         refreshView();
         open = null;
         show();
@@ -1306,6 +1308,7 @@ function act(what, value, ev, el)
         case "files":
             closeViewers();
             if (project && project.steps.length && !project.local) save();   // (still saving: it carries on)
+            if (project && !project.steps.length) render.forget(project.cache);   // (its pictures let go)
             project = null; open = null; problem = ""; show();
             break;
         case "tab": if (value === tab && !open) { if (tab === "canvas") fitAll(true); break; } finishTyping(false, false); open = null; tab = value; remember("canopy.tab", tab); show(); break;
@@ -1389,6 +1392,8 @@ async function freshKey()
     }
     catch (e) { }
 }
+
+if (location.hostname === "localhost") window.__project = () => project;   // (for checking it on this computer)
 
 (async function start()
 {

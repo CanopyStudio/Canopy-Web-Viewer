@@ -74,19 +74,104 @@ function wantFont(family, weight, italic, redraw)
 
 // ---- pictures, read from the project file once each ----
 
-export function pictures(doc, added, redraw)
+// Pictures, read from the file as they come into view. Each is decoded only as big as it is shown (a little bigger, in
+// steps, so it isn't decoded again for every zoom), and again bigger only when zoomed in further; at most a few at once;
+// and the ones not shown lately let go once they add up to too much. So a board of big photos fits in a phone's memory.
+// "cache": one per project, kept as the file is saved and read again (its pictures don't change).
+const BUDGET = 48e6, STEPS = [256, 512, 1024, 2048, 3072];
+export function cache() { return { seen: new Map(), busy: 0, queue: [], pixels: 0, frame: 0 }; }
+export function forget(c) { if (!c) return; for (const e of c.seen.values()) { if (e.img) e.img.close(); e.img = null; e.closed = true; } c.seen.clear(); c.pixels = 0; c.queue.length = 0; }
+export function pictures(doc, added, redraw, c)
 {
-    const seen = new Map();   // file name → ImageBitmap (or "loading")
-    return function get(file)
+    c = c || cache();
+    const bytesOf = file => added && added.has(file) ? Promise.resolve(added.get(file)) : doc.zip.file(file) ? doc.zip.file(file).async("uint8array") : null;
+    const next = () =>
     {
-        const got = seen.get(file);
-        if (got) return got === "loading" ? null : got;
-        seen.set(file, "loading");
-        const bytes = added && added.has(file) ? Promise.resolve(added.get(file)) : doc.zip.file(file) ? doc.zip.file(file).async("uint8array") : null;
-        if (!bytes) { seen.set(file, "none"); return null; }
-        bytes.then(b => createImageBitmap(new Blob([b]))).then(img => { seen.set(file, img); redraw(); }).catch(() => seen.set(file, "none"));
-        return null;
+        while (c.busy < 2 && c.queue.length)
+        {
+            const job = c.queue.shift(), e = c.seen.get(job.file);
+            if (!e || e.closed) continue;
+            const bytes = bytesOf(job.file);
+            if (!bytes) { e.none = true; continue; }
+            c.busy++;
+            bytes.then(b => decode(b, job.side)).then(got =>
+            {
+                if (e.closed) { got.img.close(); return; }   // (let go meanwhile)
+                if (e.img) { c.pixels -= e.img.width * e.img.height; e.img.close(); }
+                e.img = got.img; e.k = got.k; e.side = job.side; e.full = got.full; e.src = got.src;
+                c.pixels += got.img.width * got.img.height;
+                trim(c);
+                redraw();
+            }).catch(() => { e.none = true; }).finally(() => { e.wanted = 0; c.busy--; next(); });
+        }
     };
+    // "want": how many pixels across it is drawn (its longer side), or none for its own size.
+    return function get(file, want)
+    {
+        let e = c.seen.get(file);
+        if (!e) { e = { img: null, k: 1, side: 0, wanted: 0, used: 0 }; c.seen.set(file, e); }
+        if (e.none) return null;
+        e.used = performance.now();
+        const side = want ? STEPS.find(x => x >= want * 1.25) || STEPS[STEPS.length - 1] : 1e9;
+        if (side > e.side && !e.full && side > e.wanted) { e.wanted = side; c.queue.push({ file, side }); next(); }
+        return e.img ? e : null;
+    };
+}
+// Let go of pictures not drawn lately, oldest first, until they fit the budget again.
+function trim(c)
+{
+    if (c.pixels <= BUDGET) return;
+    const now = performance.now(), old = [...c.seen.entries()].filter(([, e]) => e.img && now - e.used > 1500).sort((a, b) => a[1].used - b[1].used);
+    for (const [file, e] of old)
+    {
+        if (c.pixels <= BUDGET * 0.8) break;
+        c.pixels -= e.img.width * e.img.height; e.img.close(); e.img = null; e.closed = true; c.seen.delete(file);
+    }
+}
+// A picture decoded no bigger than "side" across; with how much smaller than itself it is ("k") and whether it is whole.
+async function decode(bytes, side)
+{
+    const blob = new Blob([bytes]), size = sizeOf(bytes);
+    if (size && Math.max(size.w, size.h) > side)
+    {
+        const k = side / Math.max(size.w, size.h), w = Math.max(1, Math.round(size.w * k)), h = Math.max(1, Math.round(size.h * k));
+        let img = await createImageBitmap(blob, { resizeWidth: w, resizeHeight: h, resizeQuality: "high" });
+        if (img.width > w * 1.5)   // (a browser that won't decode it smaller: made smaller here)
+        {
+            const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+            cv.getContext("2d").drawImage(img, 0, 0, w, h); img.close();
+            img = await createImageBitmap(cv); cv.width = cv.height = 0;
+        }
+        return { img, k: img.width / size.w, full: false, src: size };
+    }
+    const img = await createImageBitmap(blob);
+    return { img, k: 1, full: true, src: { w: img.width, h: img.height } };
+}
+// A PNG's, JPEG's, GIF's or WebP's size from its first bytes, or null.
+function sizeOf(b)
+{
+    const u32 = i => (b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]) >>> 0, u16 = i => b[i] << 8 | b[i + 1];
+    if (b[0] === 0x89 && b[1] === 0x50) return { w: u32(16), h: u32(20) };
+    if (b[0] === 0x47 && b[1] === 0x49) return { w: b[6] | b[7] << 8, h: b[8] | b[9] << 8 };
+    if (b[0] === 0x52 && b[8] === 0x57 && b[12] === 0x56 && b[13] === 0x50)
+    {
+        if (b[15] === 0x20) return { w: (b[26] | b[27] << 8) & 0x3fff, h: (b[28] | b[29] << 8) & 0x3fff };
+        if (b[15] === 0x4C) return { w: 1 + ((b[22] << 8 | b[21]) & 0x3fff), h: 1 + ((b[24] & 0xf) << 10 | b[23] << 2 | (b[22] & 0xc0) >> 6) };
+        if (b[15] === 0x58) return { w: 1 + (b[24] | b[25] << 8 | b[26] << 16), h: 1 + (b[27] | b[28] << 8 | b[29] << 16) };
+    }
+    if (b[0] === 0xFF && b[1] === 0xD8)
+    {
+        let i = 2;
+        while (i + 9 < b.length)
+        {
+            if (b[i] !== 0xFF) { i++; continue; }
+            const m = b[i + 1];
+            if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return { w: u16(i + 7), h: u16(i + 5) };
+            if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+            i += 2 + u16(i + 2);
+        }
+    }
+    return null;
 }
 function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row) and file names
 {
@@ -433,12 +518,16 @@ function drawOne(ctx, o, doc, s, get, redraw)
     {
         case "image":
         {
-            const img = get(o.file);
-            if (!img) { ctx.fillStyle = "rgba(128,128,128,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h); return; }
+            // (decoded as big as it is shown here: its crop's size on the screen, over what of the picture it shows)
+            const m = ctx.getTransform(), across = Math.max(b.w * Math.hypot(m.a, m.b), b.h * Math.hypot(m.c, m.d));
+            const first = get(o.file, across), part = first && o.cw > 0 && o.ch > 0 ? Math.max(first.src.w / o.cw, first.src.h / o.ch) : 1;
+            const got = part > 1.05 ? get(o.file, across * part) || first : first;   // (cropped: as big again as the part it shows)
+            if (!got) { ctx.fillStyle = "rgba(128,128,128,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h); return; }
+            const img = got.img, k = got.k;
             flip(ctx, o, b);
             ctx.imageSmoothingQuality = "high";
-            const cw = o.cw > 0 ? o.cw : img.width, ch = o.ch > 0 ? o.ch : img.height;
-            ctx.drawImage(img, o.cx, o.cy, cw, ch, b.x, b.y, b.w, b.h);
+            const cw = o.cw > 0 ? o.cw * k : img.width, ch = o.ch > 0 ? o.ch * k : img.height;
+            ctx.drawImage(img, o.cx * k, o.cy * k, cw, ch, b.x, b.y, b.w, b.h);
             return;
         }
         case "paint":
@@ -455,7 +544,7 @@ function drawOne(ctx, o, doc, s, get, redraw)
             if (!(b.w > 0) || !(b.h > 0)) return;
             const sx = b.w / a.w, sy = b.h / a.h;
             ctx.transform(sx, 0, 0, sy, b.x - a.x * sx, b.y - a.y * sy);
-            for (const t of tiles) { const img = get(t.file); if (img) ctx.drawImage(img, t.c * T, t.r * T); }
+            for (const t of tiles) { const got = get(t.file); if (got) ctx.drawImage(got.img, t.c * T, t.r * T, T, T); }
             return;
         }
         case "rect": case "oval":
