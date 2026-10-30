@@ -6,7 +6,7 @@ import { placed } from "./cnpy.js";
 
 const T = 256;   // a drawing's tiles, in pixels
 
-// ---- colours ----
+// ---- colors ----
 
 function rgba(c, alpha)   // "#RRGGBB" or "#AARRGGBB" as CSS, its own alpha times "alpha"
 {
@@ -33,19 +33,19 @@ function fromHsv(h, s, v)
     const [r, g, b] = k === 0 ? [c, x, 0] : k === 1 ? [x, c, 0] : k === 2 ? [0, c, x] : k === 3 ? [0, x, c] : k === 4 ? [x, 0, c] : [c, 0, x];
     return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
 }
-function derived(fill, i)   // one colour of the set made from a list's colour (7 its headings, 10 its card, 11 its entries)
+function derived(fill, i)   // one color of the set made from a list's color (7 its headings, 10 its card, 11 its entries)
 {
     const [h, s] = toHsv(rgb(fill)), k = Math.min(1, s / 0.5);
     const at = { 7: [0.32, 1.0], 10: [0.22, 0.22], 11: [0.22, 0.29] }[i];
     return hex(fromHsv(h, at[0] * k, at[1]));
 }
-// A list colour's stripe, as Board makes one from it (bright enough to read as the list's own).
+// A list color's stripe, as Board makes one from it (bright enough to read as the list's own).
 export function bright(c)
 {
     const [h, s, v] = toHsv(rgb(c)), sa = s < 0.15 ? s : Math.max(s, 0.6), va = Math.max(v, 0.82);
     return hex(fromHsv(h, sa * 0.82, va)).toUpperCase();
 }
-// A list's colours, as Board makes them from its own colour (or the theme's, with none).
+// A list's colors, as Board makes them from its own color (or the theme's, with none).
 export function listLook(list)
 {
     const card = list.fill ? derived(list.fill, 10) : "#262927", tile = list.fill ? derived(list.fill, 11) : "#313534";
@@ -106,22 +106,25 @@ export function pictures(doc, added, redraw, c)
         }
     };
     // "want": how many pixels across it is drawn (its longer side), or none for its own size.
-    return function get(file, want)
+    function get(file, want)
     {
         let e = c.seen.get(file);
-        if (!e) { e = { img: null, k: 1, side: 0, wanted: 0, used: 0 }; c.seen.set(file, e); }
+        if (!e) { e = { img: null, k: 1, side: 0, wanted: 0, frame: 0 }; c.seen.set(file, e); }
         if (e.none) return null;
-        e.used = performance.now();
+        e.frame = c.frame;
         const side = want ? STEPS.find(x => x >= want * 1.25) || STEPS[STEPS.length - 1] : 1e9;
         if (side > e.side && !e.full && side > e.wanted) { e.wanted = side; c.queue.push({ file, side }); next(); }
         return e.img ? e : null;
-    };
+    }
+    get.begin = () => { c.frame++; };   // (a drawing starting: what it asks for is what is on show)
+    return get;
 }
-// Let go of pictures not drawn lately, oldest first, until they fit the budget again.
+// Let go of pictures not on show (not drawn the last time the view was drawn), the longest unseen first, until they
+// fit the budget again. (Never one on show, however long the view has stood still.)
 function trim(c)
 {
     if (c.pixels <= BUDGET) return;
-    const now = performance.now(), old = [...c.seen.entries()].filter(([, e]) => e.img && now - e.used > 1500).sort((a, b) => a[1].used - b[1].used);
+    const old = [...c.seen.entries()].filter(([, e]) => e.img && e.frame < c.frame).sort((a, b) => a[1].frame - b[1].frame);
     for (const [file, e] of old)
     {
         if (c.pixels <= BUDGET * 0.8) break;
@@ -135,8 +138,10 @@ async function decode(bytes, side)
     if (size && Math.max(size.w, size.h) > side)
     {
         const k = side / Math.max(size.w, size.h), w = Math.max(1, Math.round(size.w * k)), h = Math.max(1, Math.round(size.h * k));
-        let img = await createImageBitmap(blob, { resizeWidth: w, resizeHeight: h, resizeQuality: "high" });
-        if (img.width > w * 1.5)   // (a browser that won't decode it smaller: made smaller here)
+        let img;
+        try { img = await createImageBitmap(blob, { resizeWidth: w, resizeHeight: h, resizeQuality: "high" }); }
+        catch (e) { img = await createImageBitmap(blob); }   // (a browser that won't decode it smaller: whole, then made smaller here)
+        if (img.width > w * 1.5)
         {
             const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
             cv.getContext("2d").drawImage(img, 0, 0, w, h); img.close();
@@ -248,9 +253,12 @@ export function extent(sc, ctx)
 // ---- drawing ----
 
 // The scene onto ctx (a canvas "w" by "h" CSS pixels at "dpr"), the canvas at scale s, offset tx, ty.
+let smooth = "high";
 export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
 {
     opts = opts || {};
+    if (get.begin) get.begin();
+    smooth = opts.fast ? "low" : "high";   // (moving: drawn quickly; still: drawn well)
     const doc = sc.doc;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over";
@@ -367,7 +375,7 @@ function pieces(d)
     }
     return all.filter(x => x.nodes.length);
 }
-function leave(p, ...towards) { for (const t of towards) { const l = far(t, p); if (l > 1e-6) return { x: (t.x - p.x) / l, y: (t.y - p.y) / l }; } return null; }
+function leave(p, ...toward) { for (const t of toward) { const l = far(t, p); if (l > 1e-6) return { x: (t.x - p.x) / l, y: (t.y - p.y) / l }; } return null; }
 function corner(pc, i)   // a point's sides' directions and lengths, if it can be rounded
 {
     const ns = pc.nodes, n = ns.length;
@@ -454,7 +462,7 @@ function rounded(d, corners, place, scale)
     return path;
 }
 
-// A fill: a colour, or the gradient its text describes, across its box at its angle.
+// A fill: a color, or the gradient its text describes, across its box at its angle.
 function paint(ctx, o, b)
 {
     if (o.grad)
@@ -481,7 +489,7 @@ function paint(ctx, o, b)
     }
     return rgba(o.fill);
 }
-function mixA(a, b, t)   // two "#AARRGGBB" colours mixed
+function mixA(a, b, t)   // two "#AARRGGBB" colors mixed
 {
     const p = s => { const h = s.replace("#", ""); return h.length === 8 ? [0, 2, 4, 6].map(i => parseInt(h.slice(i, i + 2), 16)) : [255, ...[0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16))]; };
     const x = p(a), y = p(b);
@@ -525,7 +533,7 @@ function drawOne(ctx, o, doc, s, get, redraw)
             if (!got) { ctx.fillStyle = "rgba(128,128,128,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h); return; }
             const img = got.img, k = got.k;
             flip(ctx, o, b);
-            ctx.imageSmoothingQuality = "high";
+            ctx.imageSmoothingQuality = smooth;
             const cw = o.cw > 0 ? o.cw * k : img.width, ch = o.ch > 0 ? o.ch * k : img.height;
             ctx.drawImage(img, o.cx * k, o.cy * k, cw, ch, b.x, b.y, b.w, b.h);
             return;
@@ -644,7 +652,7 @@ function drawType(ctx, o, b, redraw)
 const NOTE = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 let measurer = null;
 function measureCtx(ctx) { if (ctx) return ctx; if (!measurer) measurer = document.createElement("canvas").getContext("2d"); return measurer; }
-const BAND = 10;   // a list's colour, as a band along its card's top edge
+const BAND = 10;   // a list's color, as a band along its card's top edge
 export function listLayout(o, ctx)
 {
     const key = o.w + "|" + o.name + "|" + o.showDone + "|" + o.rows.map(r => r.kind + r.done + r.text + (r.link ? 1 : 0)).join("\u0001");
@@ -684,7 +692,7 @@ function drawList(ctx, o)
     ctx.scale(o.scale, o.scale);
     ctx.fillStyle = look.card;
     ctx.beginPath(); ctx.roundRect(0, 0, w, L.h, 12); ctx.fill();
-    ctx.save(); ctx.clip();   // the band: the list's colour along its top edge, its corners the card's
+    ctx.save(); ctx.clip();   // the band: the list's color along its top edge, its corners the card's
     ctx.fillStyle = rgba(look.stripe); ctx.fillRect(0, 0, w, BAND);
     ctx.restore();
     ctx.fillStyle = look.onCard;

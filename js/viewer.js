@@ -17,6 +17,7 @@ export class Viewer
         this.pointers = new Map();
         this.lastTap = 0;
         this.queued = false;
+        this.movingUntil = 0;
         this.resize = () => this.fitCanvas();
         new ResizeObserver(this.resize).observe(host);
         this.fitCanvas();
@@ -38,6 +39,7 @@ export class Viewer
         this.redraw();
     }
 
+    moving() { this.movingUntil = performance.now() + 140; }
     redraw()
     {
         if (this.queued) return;
@@ -47,7 +49,11 @@ export class Viewer
             this.queued = false;
             const sc = this.scene();
             if (!sc || !this.canvas.isConnected) return;   // (gone since it was asked for)
-            render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw());
+            // (moving: pictures scaled quickly; drawn well again once it stops)
+            const fast = performance.now() < this.movingUntil;
+            render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
+            clearTimeout(this.sharpen);
+            if (fast) this.sharpen = setTimeout(() => this.redraw(), 160);
             if (this.overlay) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
         });
     }
@@ -72,7 +78,7 @@ export class Viewer
             const fx = (this.w / 2 - from.tx) / from.s, fy = (this.h / 2 - from.ty) / from.s, gx = (this.w / 2 - to.tx) / to.s, gy = (this.h / 2 - to.ty) / to.s;
             const cx = fx + (gx - fx) * k, cy = fy + (gy - fy) * k;
             this.cam = { s, tx: this.w / 2 - cx * s, ty: this.h / 2 - cy * s };
-            this.redraw();
+            this.moving(); this.redraw();
             if (u < 1) requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
@@ -87,7 +93,7 @@ export class Viewer
         const s = Math.max(0.01, Math.min(64, this.cam.s * k));
         k = s / this.cam.s;
         this.cam = { s, tx: px - (px - this.cam.tx) * k, ty: py - (py - this.cam.ty) * k };
-        this.redraw();
+        this.moving(); this.redraw();
     }
 
     at(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
@@ -116,7 +122,7 @@ export class Viewer
         {
             this.cam.tx += now.x - was.x; this.cam.ty += now.y - was.y;
             this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y);
-            this.redraw();
+            this.moving(); this.redraw();
         }
         else if (this.pointers.size === 2 && this.pinch)
         {
@@ -154,7 +160,7 @@ export class Viewer
         e.preventDefault();
         const p = this.at(e);
         if (e.ctrlKey || e.metaKey) this.zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.01));
-        else { this.cam.tx -= e.deltaX; this.cam.ty -= e.deltaY; this.redraw(); }
+        else { this.cam.tx -= e.deltaX; this.cam.ty -= e.deltaY; this.moving(); this.redraw(); }
     }
 }
 

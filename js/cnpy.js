@@ -85,7 +85,7 @@ function readBody(key, rest, meta, ver)
             Object.assign(o, { kind: k === "A" ? "arrow" : "line", ax: num(f[1]), ay: num(f[2]), bx: num(f[3]), by: num(f[4]), scale: num(f[5]) || 1, name: unescape(f[9] || ""), fill: col(f[10]), stroke: col(f[11]), width: num(f[12]) });
         if (f.length <= 12)
         {
-            // (saved before shapes had a fill and an outline of their own: one colour, for one or the other)
+            // (saved before shapes had a fill and an outline of their own: one color, for one or the other)
             const ink = col(f[6]), filled = f[7] === "1" && (o.kind === "rect" || o.kind === "oval");
             o.fill = filled ? ink : null; o.stroke = filled ? null : ink; o.width = 3 * (o.scale || 1);
             if (f.length > 9) o.name = unescape(f[9]);
@@ -108,12 +108,12 @@ function readBody(key, rest, meta, ver)
 }
 
 // The project's text read: every object in drawing order (the lists with where their lines are), the boards, which
-// groups are layers, hidden or faded, the canvas colour, and the version.
+// groups are layers, hidden or faded, the canvas color, and the version.
 export function parse(text)
 {
     const lines = text.split("\n");
     const items = [], lists = [], boards = [];
-    const doc = { lines, items, lists, boards, palette: [], empties: [], boardsLine: -1, lastBoardLine: -1, folders: new Set(), hides: new Set(), locks: new Set(), fades: new Map(), canvas: "#161717", boardColor: null, boardLook: 0, version: ROWS_SINCE };
+    const doc = { lines, items, lists, boards, palette: [], empties: [], boardsLine: -1, lastBoardLine: -1, listOrder: [], listOrderLine: -1, folders: new Set(), hides: new Set(), locks: new Set(), fades: new Map(), canvas: "#161717", boardColor: null, boardLook: 0, version: ROWS_SINCE };
     let meta = null, metaAt = -1, list = null, last = null;
     for (let i = 0; i < lines.length; i++)
     {
@@ -135,6 +135,7 @@ export function parse(text)
         else if (key === "boards") { doc.boardsLine = i; const f = rest.split(" "); doc.boardColor = col(f[0]); doc.boardLook = parseInt(f[1], 10) || 0; }
         else if (key === "folders") rest.split(" ").filter(Boolean).forEach(x => doc.folders.add(x));
         else if (key === "hides") rest.split(" ").filter(Boolean).forEach(x => doc.hides.add(x));
+        else if (key === "listorder") { doc.listOrderLine = i; doc.listOrder = rest.split(" ").filter(Boolean); }   // (the order the lists are shown in here)
         else if (key === "locks") { doc.locksLine = i; rest.split(" ").filter(Boolean).forEach(x => doc.locks.add(x)); }
         else if (key === "empty") { const f = rest.split(" "); if (f.length >= 2) doc.empties.push({ id: f[0], name: f.slice(2).join(" ") || "Layer" }); }
         else if (key === "fades") rest.split(" ").filter(Boolean).forEach(x => { const kv = x.split("="); if (kv.length === 2) doc.fades.set(kv[0], num(kv[1])); });
@@ -218,7 +219,7 @@ export function compose(t, s)   // t then s
 function metaLine(id, layer, author, lock) { return "meta " + id + "|" + (layer ? layer.id : "-") + "|0|" + (layer ? escape(layer.name) : "") + "|" + escape(author || "") + "|" + (lock ? "L" : "") + "|1|normal|0|rr"; }
 const n = v => String(Math.round(v * 1000) / 1000);
 
-// The project's text as "view" has it: the lists' entries, names and colours; objects moved, sized or deleted; boards
+// The project's text as "view" has it: the lists' entries, names and colors; objects moved, sized or deleted; boards
 // added (after the others); and lists and photos added (after everything, on top).
 export function write(doc, view)
 {
@@ -242,7 +243,7 @@ export function write(doc, view)
         cuts.push({ from: o.start, to: o.end, put: now.rows.map(rowLine) });
         if (now.name !== o.name || now.ink !== o.ink || now.fill !== o.fill || now.showDone !== o.showDone || now.x !== o.x || now.y !== o.y || now.w !== o.w || now.scale !== o.scale)
         {
-            // Its own line: its place, size, name, colours and showing what's done as they are now.
+            // Its own line: its place, size, name, colors and showing what's done as they are now.
             const f = lines[o.line].substring(5).split("|");
             while (f.length < 7) f.push("");
             f[0] = n(now.x); f[1] = n(now.y); f[2] = n(now.w); f[3] = n(now.scale || 1);
@@ -260,6 +261,13 @@ export function write(doc, view)
         else if (left.length) { const at = doc.boardsLine >= 0 ? doc.boardsLine : 1; cuts.push({ from: at, to: at, put: ["locks " + left.join(" ")] }); }
     }
     for (const b of doc.boards) if (view.goneBoards.has(b.id)) cuts.push({ from: b.line, to: b.line + 1, put: [] });
+    if (view.order)
+    {
+        // The lists' order, set here: its line made anew (or made, before the boards' line).
+        const line = view.order.length ? ["listorder " + view.order.join(" ")] : [];
+        if (doc.listOrderLine >= 0) cuts.push({ from: doc.listOrderLine, to: doc.listOrderLine + 1, put: line });
+        else if (line.length) { const at = doc.boardsLine >= 0 ? doc.boardsLine : 1; cuts.push({ from: at, to: at, put: line }); }
+    }
     if (view.boards.length)
     {
         const at = doc.lastBoardLine >= 0 ? doc.lastBoardLine + 1 : doc.boardsLine >= 0 ? doc.boardsLine + 1 : 1;
@@ -280,7 +288,7 @@ export function write(doc, view)
     return lines.join("\n");
 }
 
-// A new, empty project, as the desktop app starts one: its colours, grid and one empty layer to put things in.
+// A new, empty project, as the desktop app starts one: its colors, grid and one empty layer to put things in.
 export function blank()
 {
     const layer = newId();
@@ -326,6 +334,7 @@ export function apply(doc, steps)
     const lists = doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) }));
     const photos = [], deleted = new Set(), removed = new Set(), moved = new Map(), boards = [], locks = new Map(), unlocked = new Set();
     const relocked = new Set(), goneBoards = new Set(), restored = [];
+    let order = null;   // the lists' order, once set here
     const items = new Map(doc.items.map(o => [o.id, o]));
     const ids = new Set(doc.items.map(o => o.id));   // (already in the file: a save that went through, its answer lost)
     // Where an entry goes: after the one named, at the top for none (null), at the end if that one has gone.
@@ -353,6 +362,7 @@ export function apply(doc, steps)
             for (const g of s.relock || []) { if (unlocked.has(g)) unlocked.delete(g); else relocked.add(g); }
             continue;
         }
+        if (s.t === "order") { order = s.ids.slice(); continue; }
         if (s.t === "newboard") { if (goneBoards.has(s.board.id)) goneBoards.delete(s.board.id); else if (!doc.boards.some(b => b.id === s.board.id) && !boards.some(b => b.id === s.board.id)) boards.push({ ...s.board }); continue; }
         if (s.t === "delboard") { const k = boards.findIndex(b => b.id === s.id); if (k >= 0) boards.splice(k, 1); else if (doc.boards.some(b => b.id === s.id)) goneBoards.add(s.id); continue; }
         if (s.t === "restore")
@@ -385,7 +395,7 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order };
 }
 
 // ---- undoing: what a step would be undone by, worked out from the project as it is before the step ----
@@ -427,6 +437,7 @@ export function inverse(doc, view, s)
         case "restore": return [{ t: "delobj", list: null, ids: s.things.map(th => th.id) }];
         case "place": return [{ t: "place", list: null, ids: s.ids, by: { k: 1 / s.by.k, ox: -s.by.ox / s.by.k, oy: -s.by.oy / s.by.k } }];
         case "newboard": return [{ t: "delboard", list: null, id: s.board.id }];
+        case "order": return [{ t: "order", list: null, ids: (view.order || doc.listOrder).slice() }];
         case "delboard": { const b = doc.boards.concat(view.boards).find(o => o.id === s.id); return b ? [{ t: "newboard", list: null, board: { id: b.id, x: b.x, y: b.y, w: b.w, h: b.h, name: b.name } }] : []; }
         case "lock":
         {

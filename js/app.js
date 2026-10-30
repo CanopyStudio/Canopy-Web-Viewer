@@ -22,7 +22,55 @@ let editing = null;       // the entry being typed in: { id } or, for a new one,
 let problem = "";         // what went wrong, shown until the next one
 let canvasView = null, boardView = null;   // the viewers on show
 let undos = [], redos = [];   // what undoes each change (steps), latest last; and what redoes each one undone
-let back = [], ahead = [];    // folders gone back from and into, for the arrows
+// Where things are, kept in the browser's history (so its back and forward, and a swipe from the edge, go through the
+// folders, projects and lists opened here): { at (how far in), files (the folder on show) | project (its path), open }.
+function here() { const at = history.state && history.state.at || 0; return project ? { at, project: project.path, local: project.local, open: open ? { ...open } : null } : { at, files: folder }; }
+function furthest() { try { return parseInt(sessionStorage.getItem("canopy.nav") || "0", 10); } catch (e) { return 0; } }
+// Somewhere new: a step on in the history (anything ahead of it gone), then shown. "from": a card it grows from.
+function go(to, from)
+{
+    const at = (history.state && history.state.at || 0) + 1;
+    history.pushState({ ...to, at }, "");
+    try { sessionStorage.setItem("canopy.nav", String(at)); } catch (e) { }
+    arrive(to, from);
+}
+function noted() { history.replaceState(here(), ""); }   // (what is on show now, as the history has it)
+// Shown as a step in the history says (gone back or forward to it, or just stepped to).
+async function arrive(to, from)
+{
+    if (!to) to = { files: "" };
+    if (to.files !== undefined)
+    {
+        if (project) leaveProject();
+        folder = to.files; remember("canopy.folder", folder);
+        window.scrollTo(0, 0);
+        return showFiles();
+    }
+    if (!project || project.path !== to.project)
+    {
+        if (to.local) return arrive({ files: folder });   // (a project from the phone can't be opened again from here)
+        if (project) leaveProject();
+        await openPath(to.project);
+        if (!project || project.path !== to.project) return;
+    }
+    if (to.open && (!open || open.kind !== to.open.kind || open.id !== to.open.id))
+    {
+        if (open) { open = null; show(); }
+        travelling = true;   // (the history has this step already)
+        try { if (to.open.kind === "list") openList(to.open.id, from); else openBoard(to.open.id, from); }
+        finally { travelling = false; }
+    }
+    else if (!to.open && open) closeOver();
+}
+window.addEventListener("popstate", e => { finishTyping(false, false); if (sheetOpen()) app.querySelectorAll(".picker").forEach(x => x.remove()); arrive(e.state); });
+function goBack() { if ((history.state && history.state.at || 0) > 0) history.back(); else if (project) { if (open) closeOver(); else go({ files: folder }); } else if (folder !== "") go({ files: folder.split("/").slice(0, -1).join("/") }); }
+function leaveProject()
+{
+    closeViewers();
+    if (project && project.steps.length && !project.local) save();   // (still saving: it carries on)
+    if (project && !project.steps.length) render.forget(project.cache);   // (its pictures let go)
+    project = null; open = null; problem = "";
+}
 
 function remembered(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } }
 function remember(key, v) { try { if (v === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch (e) { } }
@@ -84,14 +132,14 @@ const feel = {
 
 // The few Canopy Board has none of, drawn here as its are (lines 2.667 wide at 24, round ends).
 const icons = {
-    back: '<path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.667" stroke-linecap="round" stroke-linejoin="round"/>',
+    back: '<path d="M15.84 6.48L7.44 12L15.84 17.52Z" fill="currentColor" stroke="currentColor" stroke-width="3.36" stroke-linecap="round" stroke-linejoin="round"/>',
     tick: '<path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
     handle: '<path d="M6 9h12M6 15h12" stroke="currentColor" stroke-width="2.667" stroke-linecap="round"/>',
     saved: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M8.2 12.3l2.6 2.6 5-5.3" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
     saving: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4" opacity=".25"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
     waiting: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 7.5v5.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="16.4" r="1.2" fill="currentColor"/>',
-    chevron: '<path d="M10 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
-    forward: '<path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.667" stroke-linecap="round" stroke-linejoin="round"/>'
+    chevron: '<path d="M8.16 6.48L16.56 12L8.16 17.52Z" fill="currentColor" stroke="currentColor" stroke-width="3.36" stroke-linecap="round" stroke-linejoin="round"/>',
+    forward: '<path d="M8.16 6.48L16.56 12L8.16 17.52Z" fill="currentColor" stroke="currentColor" stroke-width="3.36" stroke-linecap="round" stroke-linejoin="round"/>'
 };
 Object.assign(icons, boardIcons);   // (Canopy Board's own, where it has one)
 function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
@@ -108,6 +156,10 @@ let draws = 0;   // how many times a page has been drawn
 function show()
 {
     draws++;
+    noted();
+    const inProject = !!project;
+    if (inProject && !document.documentElement.classList.contains("in-project")) window.scrollTo(0, 0);
+    document.documentElement.classList.toggle("in-project", inProject);   // (the page behind a project never scrolls)
     const typing = app.querySelector("textarea, input.title-edit");
     if (typing) typing.dataset.gone = "1";   // (drawn over: its blur, as it goes, is not the person leaving it)
     if (project) return showProject();
@@ -130,7 +182,8 @@ async function showFiles()
     }
     const pins = remembered("canopy.pinned", []);
     const recent = remembered("canopy.recent", []).filter(r => !pins.includes(r));
-    const arrows = iconButton("back", "back", "Back", "", !back.length && folder === "") + iconButton("ahead", "forward", "Forward", "", !ahead.length);
+    const at = history.state && history.state.at || 0;
+    const arrows = iconButton("back", "back", "Back", "", at === 0 && folder === "") + iconButton("ahead", "forward", "Forward", "", at >= furthest());
     const inFolder = r => r.split("/").slice(-2, -1)[0] || "Dropbox";
     app.innerHTML = bar("Canopy Web Viewer", "", arrows + iconButton("account", "more", "Account"), "files-bar", "home")
         + '<main class="page enter">'
@@ -176,10 +229,18 @@ function localOpener()
         + '<input class="hidden-input" type="file" id="picker"></div>';
 }
 
+// The pictures of whichever project is open (it changes as the project is saved and read again).
+function pictureGetter() { const g = (f, want) => project && project.get(f, want); g.begin = () => { if (project && project.get.begin) project.get.begin(); }; return g; }
+
 // ---- a project: three tabs (its lists, its boards, the canvas), and a list or board opened over them ----
 
 function current() { return project && open && open.kind === "list" ? project.view.lists.find(l => l.id === open.id) : null; }
-function sortedLists() { return project.view.lists.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x)); }
+function sortedLists()
+{
+    const order = project.view.order || project.base.doc.listOrder, at = new Map(order.map((id, i) => [id, i]));
+    const k = l => at.has(l.id) ? at.get(l.id) : Infinity;
+    return project.view.lists.slice().sort((a, b) => (k(a) - k(b)) || (a.y - b.y) || (a.x - b.x));
+}
 
 function showProject()
 {
@@ -197,6 +258,7 @@ function showProject()
         shell.dataset.tab = "";
     }
     shell.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.value === tab));
+    requestAnimationFrame(() => { const t = shell.querySelector(".tabs"); if (t) document.documentElement.style.setProperty("--tabs-h", t.offsetHeight + "px"); });   // (a board opened stops above them)
     const head = shell.querySelector("#head");
     head.innerHTML = bar(project.name, iconButton("files", "back", "Back"), statusHtml() + undoButtons() + (tab === "canvas" ? iconButton("fitall", "fit", "Fit everything") : "") + add);
     wire(head);
@@ -230,12 +292,108 @@ function showLists(holder)
     closeViewers();
     const lists = sortedLists();
     if (lists.length === 0) { holder.innerHTML = '<div class="empty big">No lists in this project yet' + (project.base.doc.readOnly ? "" : '<br><button class="quiet-button" data-do="newlist">New list</button>') + "</div>"; wire(holder); return; }
-    masonry(holder, lists.map(l => ({ el: element(listCard(l)), weight: 3 + Math.min(4, visible(l).length) * 1.1 })));
+    const cards = lists.map(l => ({ id: l.id, el: element(listCard(l)), weight: 3 + Math.min(4, visible(l).length) * 1.1 }));
+    masonry(holder, cards);
+    if (!project.base.doc.readOnly) arrangeCards(holder, cards);
     if (project.base.doc.readOnly) holder.insertAdjacentHTML("afterbegin", '<div class="problem">This project was saved by an older version of Canopy Board, so it can be looked at here but not changed. Open and save it in Canopy Board to update it.</div>');
     if (problem) holder.insertAdjacentHTML("afterbegin", '<div class="problem">' + text(problem) + "</div>");
     wire(holder);
 }
 function visible(l) { return l.rows.filter(r => l.showDone || !r.done); }
+
+// A list's card held down: lifted, and dragged to where it should be among the others, which make room for it as it
+// goes (in the columns again, in the order it would leave); let go, that order is kept in the project.
+function arrangeCards(holder, cards)
+{
+    const scroller = holder;   // (#tab: scrolled while a card is held near its top or bottom)
+    for (const c of cards)
+    {
+        let timer = null, x0 = 0, y0 = 0;
+        const el = c.el;
+        el.addEventListener("pointerdown", e =>
+        {
+            if (e.button > 0) return;
+            x0 = e.clientX; y0 = e.clientY;
+            el.classList.add("pressing");
+            timer = setTimeout(() => { timer = null; el.classList.remove("pressing"); lift(c, e); }, 420);
+        });
+        const stop = () => { if (timer) clearTimeout(timer); timer = null; el.classList.remove("pressing"); };
+        el.addEventListener("pointermove", e => { if (timer && Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 8) stop(); });
+        el.addEventListener("pointerup", stop);
+        el.addEventListener("pointercancel", stop);
+        el.addEventListener("contextmenu", e => e.preventDefault());
+        el.addEventListener("click", e => { if (el.dataset.held) { e.stopPropagation(); e.preventDefault(); delete el.dataset.held; } }, true);
+    }
+    function lift(c, e)
+    {
+        const el = c.el, r = el.getBoundingClientRect();
+        el.dataset.held = "1";
+        feel.hold();
+        // What follows the finger: a copy of the card; the card itself stays as the gap it will drop into.
+        const ghost = el.cloneNode(true);
+        ghost.classList.add("ghost");
+        Object.assign(ghost.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px" });
+        document.body.appendChild(ghost);
+        el.classList.add("gap");
+        let order = cards.slice(), dx = e.clientX - r.left, dy = e.clientY - r.top, px = e.clientX, py = e.clientY, scroll = 0;
+        const noScroll = ev => ev.preventDefault();
+        document.addEventListener("touchmove", noScroll, { passive: false });
+        const place = () =>
+        {
+            ghost.style.transform = "translate(" + (px - dx - r.left) + "px," + (py - dy - r.top) + "px) scale(1.04) rotate(-1deg)";
+            // Where it would go: before whichever card's middle the finger is above, in reading order of the columns.
+            const others = order.filter(o => o !== c);
+            let best = null, bestD = Infinity;
+            for (const o of others)
+            {
+                const b = o.el.getBoundingClientRect();
+                const d = Math.hypot(px - (b.left + b.width / 2), py - (b.top + b.height / 2));
+                if (d < bestD) { bestD = d; best = { o, b }; }
+            }
+            if (!best) return;
+            const at = others.indexOf(best.o) + (py > best.b.top + best.b.height / 2 ? 1 : 0);
+            const now = others.slice(0, at).concat([c], others.slice(at));
+            if (now.some((o, i) => o !== order[i])) { order = now; relayout(); }
+        };
+        const relayout = () =>
+        {
+            // (each card slides from where it was to where it now is)
+            const was = new Map(order.map(o => [o, o.el.getBoundingClientRect()]));
+            masonry(holder, order);
+            if (calm) return;
+            for (const o of order)
+            {
+                const a = was.get(o), b = o.el.getBoundingClientRect();
+                if (Math.abs(a.left - b.left) + Math.abs(a.top - b.top) > 1) o.el.animate([{ transform: "translate(" + (a.left - b.left) + "px," + (a.top - b.top) + "px)" }, { transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.9,.3,1)" });
+            }
+        };
+        const edge = () =>
+        {
+            // Near the top or bottom: scrolled along.
+            const b = scroller.getBoundingClientRect(), v = py < b.top + 70 ? -10 : py > b.bottom - 70 ? 10 : 0;
+            if (v) { scroller.scrollTop += v; place(); }
+            scroll = requestAnimationFrame(edge);
+        };
+        scroll = requestAnimationFrame(edge);
+        const move = ev => { px = ev.clientX; py = ev.clientY; place(); };
+        const drop = () =>
+        {
+            document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", drop); document.removeEventListener("pointercancel", drop);
+            document.removeEventListener("touchmove", noScroll);
+            cancelAnimationFrame(scroll);
+            const b = el.getBoundingClientRect();
+            const done = () => { ghost.remove(); el.classList.remove("gap"); };
+            if (calm) done();
+            else ghost.animate([{ transform: ghost.style.transform }, { transform: "translate(" + (b.left - r.left) + "px," + (b.top - r.top) + "px)" }], { duration: 200, easing: "cubic-bezier(.2,.9,.3,1)", fill: "forwards" }).onfinish = done;
+            const ids = order.map(o => o.id), was = sortedLists().map(l => l.id);
+            if (ids.some((id, i) => id !== was[i])) { step({ t: "order", ids, list: null }); feel.drop(); }
+            setTimeout(() => { delete el.dataset.held; }, 60);
+        };
+        // (followed from the page, not the card: the card itself moves among the columns as it goes)
+        document.addEventListener("pointermove", move); document.addEventListener("pointerup", drop); document.addEventListener("pointercancel", drop);
+        place();
+    }
+}
 function listCard(l)
 {
     const c = render.listLook(l), rows = visible(l), shown = rows.slice(0, 4);
@@ -279,7 +437,7 @@ function showCanvas(holder, fresh)
     {
         closeViewers();
         holder.innerHTML = '<div class="stage"></div>';
-        canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, (f, want) => project && project.get(f, want), null);
+        canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, pictureGetter(), null);
         editable(canvasView);
         canvasView.onFitAll = () => fitAll(true);
         if (location.hostname === "localhost") window.__view = () => canvasView;   // (for checking it on this computer)
@@ -503,8 +661,11 @@ function shrink(done)
                  : over.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(24px)" }], { duration: 160, easing: "cubic-bezier(.16,1,.3,1)", fill: "forwards" });
     a.onfinish = done;
 }
+let travelling = false;
+function stepTo(o) { if (!travelling && (!open || open.kind !== o.kind || open.id !== o.id)) { const at = (history.state && history.state.at || 0) + 1; history.pushState({ ...here(), open: o, at }, ""); try { sessionStorage.setItem("canopy.nav", String(at)); } catch (e) { } } }
 function openList(id, card)
 {
+    stepTo({ kind: "list", id });
     const from = card ? card.getBoundingClientRect() : null;
     open = { kind: "list", id }; arranging = false; editing = null;
     show();
@@ -512,6 +673,7 @@ function openList(id, card)
 }
 function openBoard(id, card)
 {
+    stepTo({ kind: "board", id });
     const from = card ? card.getBoundingClientRect() : null;
     open = { kind: "board", id };
     show();
@@ -598,7 +760,7 @@ function showBoard(over)
     {
         over.innerHTML = '<div class="board-wrap" data-id="' + text(b.id) + '"><div class="head"></div><div class="stage fade-in"></div></div>';
         wrap = over.querySelector(".board-wrap");
-        boardView = new Viewer(wrap.querySelector(".stage"), () => project && project.scene, (f, want) => project && project.get(f, want), null);
+        boardView = new Viewer(wrap.querySelector(".stage"), () => project && project.scene, pictureGetter(), null);
         editable(boardView);
         boardView.onFitAll = () => boardView.fit(b, 0.04, true);
         boardView.fit(b, 0.04, false);
@@ -825,6 +987,7 @@ function newList()
     const x = e.x + e.w + 80, y = lists.length ? Math.min(...lists.map(l => l.y)) : e.y;
     const id = cnpy.newId();
     step({ t: "newlist", list: id, x, y, name: "", layer: cnpy.topLayer(doc), author: dbx.who() });
+    stepTo({ kind: "list", id });
     open = { kind: "list", id }; arranging = false; editing = { title: true };
     show();
     grow(app.querySelector("#over .sheet-wrap"), null);
@@ -838,9 +1001,7 @@ function newBoard()
     while (all.some(b => b.name === "Board " + k)) k++;
     const board = { id: cnpy.newId(), x: Math.round(e.x + e.w + 120), y: Math.round(e.y), w: 1920, h: 1080, name: "Board " + k };
     step({ t: "newboard", list: null, board });
-    open = { kind: "board", id: board.id };
-    show();
-    grow(app.querySelector("#over .board-wrap"), null);
+    openBoard(board.id, null);
 }
 
 // A new project, empty, in the Dropbox folder on show, opened.
@@ -888,6 +1049,7 @@ async function openLocal(file)
         const doc = await cnpy.open(new Uint8Array(await file.arrayBuffer()));
         if (project) render.forget(project.cache);
         project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map(), cache: render.cache() };
+        history.pushState({ at: (history.state && history.state.at || 0) + 1, project: file.name, local: true, open: null }, "");
         undos = []; redos = [];
         project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         refreshView();
@@ -1021,7 +1183,7 @@ function drag(handle, e)
     handle.addEventListener("pointercancel", up);
 }
 
-// ---- an entry held down: its menu (what kind it is, its box's colour, a link, delete); swiped left: deleted ----
+// ---- an entry held down: its menu (what kind it is, its box's color, a link, delete); swiped left: deleted ----
 
 function touchEntries(root)
 {
@@ -1032,16 +1194,27 @@ function touchEntries(root)
         const stop = () => { if (timer) clearTimeout(timer); timer = null; el.classList.remove("pressing"); };
         el.addEventListener("pointerdown", e =>
         {
-            if (e.target.closest("textarea, .check, .link")) return;
+            if (e.target.closest(".check, .link")) return;
             x0 = e.clientX; y0 = e.clientY; sliding = false; dx = 0; id = e.pointerId; past = false;
             el.classList.add("pressing");   // (sinks a little while held)
             timer = setTimeout(() =>
             {
-                timer = null; el.dataset.held = "1"; el.classList.remove("pressing");
+                timer = null; el.classList.remove("pressing");
                 feel.hold();
-                if (!calm) el.animate([{ transform: "scale(.96)" }, { transform: "scale(1.025)" }, { transform: "scale(1)" }], { duration: 260, easing: "cubic-bezier(.2,.9,.3,1.3)" });
-                entryMenu(el.dataset.id);
-            }, 480);
+                let at = el;
+                if (el.querySelector("textarea"))
+                {
+                    // (typing in it: the words kept, the box let go, so the phone's own selecting doesn't start)
+                    const id = el.dataset.id;
+                    el.querySelector("textarea").blur();
+                    finishTyping(false, false);
+                    refreshList();
+                    at = app.querySelector('#entries .entry[data-id="' + CSS.escape(id) + '"]') || el;
+                }
+                at.dataset.held = "1";
+                if (!calm) at.animate([{ transform: "scale(.96)" }, { transform: "scale(1.025)" }, { transform: "scale(1)" }], { duration: 260, easing: "cubic-bezier(.2,.9,.3,1.3)" });
+                entryMenu(at.dataset.id);
+            }, 460);
         });
         el.addEventListener("pointermove", e =>
         {
@@ -1087,17 +1260,25 @@ function sheetUp(build, chose)
     const over = app.querySelector("#over .sheet-wrap") || app;
     const sheet = element('<div class="picker"><div class="shade"></div><div class="panel"></div></div>');
     over.appendChild(sheet);
-    const panel = sheet.querySelector(".panel");
+    const panel = sheet.querySelector(".panel"), shade = sheet.querySelector(".shade");
     let closing = false;
-    const close = then =>
+    // Closed: slid down from wherever it is (dragged part way, say), the shade fading with it; both held where they end
+    // until it is gone (else the shade shows again, for a moment, before it goes: a flicker). The list behind is as its
+    // changes left it already: not drawn again.
+    const close = (then, from) =>
     {
         if (closing) return;
         closing = true;
-        const done = () => { sheet.remove(); if (then) then(); else if (current() && app.querySelector("#over #entries")) { redrawEntries(); undoable(); } else show(); };
+        document.removeEventListener("keydown", esc);
+        app.querySelectorAll("#entries .entry.lit").forEach(o => o.classList.remove("lit"));
+        const done = () => { sheet.remove(); if (then) then(); else if (current() && app.querySelector("#over #entries")) undoable(); else show(); };
         if (calm) return done();
-        sheet.querySelector(".shade").animate([{ opacity: 1 }, { opacity: 0 }], { duration: 170 });
-        panel.animate([{ transform: "none" }, { transform: "translateY(100%)" }], { duration: 180, easing: "ease-in" }).onfinish = done;
+        const shade = sheet.querySelector(".shade"), at = from || 0, left = Math.max(0.15, 1 - at / Math.max(1, panel.offsetHeight));
+        shade.animate([{ opacity: parseFloat(getComputedStyle(shade).opacity) }, { opacity: 0 }], { duration: 200 * left, easing: "ease-out", fill: "forwards" });
+        panel.animate([{ transform: "translateY(" + at + "px)" }, { transform: "translateY(100%)" }], { duration: 220 * left, easing: "cubic-bezier(.3,0,.8,.15)", fill: "forwards" }).onfinish = done;
     };
+    const esc = e => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", esc);
     const again = () =>
     {
         panel.innerHTML = '<div class="grip"></div>' + build();
@@ -1106,19 +1287,68 @@ function sheetUp(build, chose)
     again();
     // (The finger that held an entry down to open this is still on the glass: its lift is no tap on the shade. Only a
     // press that starts on the shade, after it is up, closes it.)
-    const shade = sheet.querySelector(".shade"), since = performance.now();
+    const since = performance.now();
     let armed = false;
     shade.addEventListener("pointerdown", () => { armed = performance.now() - since > 120; });
     shade.addEventListener("click", () => { if (armed) close(); armed = false; });
     if (!calm)
     {
         panel.animate([{ transform: "translateY(100%)" }, { transform: "none" }], { duration: 320, easing: "cubic-bezier(.2,1.1,.3,1)" });
-        sheet.querySelector(".shade").animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 });
+        shade.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 });
     }
+    // Pulled down by a finger (from anywhere on it, when it is scrolled to its top): it follows, the shade lightening;
+    // let go far enough down, or flicked down, it closes; else it springs back up.
+    let pull = null;
+    panel.addEventListener("touchstart", e => { if (e.touches.length === 1 && !closing) pull = { y0: e.touches[0].clientY, dy: 0, on: false, top: panel.scrollTop <= 0, t: performance.now(), v: 0 }; }, { passive: true });
+    panel.addEventListener("touchmove", e =>
+    {
+        if (!pull) return;
+        const dy = e.touches[0].clientY - pull.y0;
+        if (!pull.on)
+        {
+            if (pull.top && dy > 8) { pull.on = true; pull.y0 += 8; }
+            else if (Math.abs(dy) > 8) { pull = null; return; }
+            else return;
+        }
+        e.preventDefault();
+        const d = e.touches[0].clientY - pull.y0, now = performance.now(), at = d > 0 ? d : d / 4;   // (up: a little, stiffly)
+        pull.v = (at - pull.dy) / Math.max(1, now - pull.t); pull.t = now; pull.dy = at;
+        panel.style.transform = "translateY(" + at + "px)";
+        shade.style.opacity = String(Math.max(0, 1 - Math.max(0, at) / panel.offsetHeight));
+    }, { passive: false });
+    const letGo = () =>
+    {
+        if (!pull || !pull.on) { pull = null; return; }
+        const p = pull; pull = null;
+        panel.dataset.pulled = "1";   // (no tap on what the finger was over)
+        setTimeout(() => { delete panel.dataset.pulled; }, 50);
+        if (p.dy > panel.offsetHeight * 0.3 || p.v > 0.5) { panel.style.transform = ""; return close(undefined, p.dy); }
+        panel.style.transform = ""; shade.style.opacity = "";
+        if (!calm) panel.animate([{ transform: "translateY(" + p.dy + "px)" }, { transform: "none" }], { duration: 280, easing: "cubic-bezier(.2,1.2,.3,1)" });
+    };
+    panel.addEventListener("touchend", letGo);
+    panel.addEventListener("touchcancel", letGo);
+    panel.addEventListener("click", e => { if (panel.dataset.pulled) { e.stopPropagation(); e.preventDefault(); } }, true);
     return sheet;
 }
-// The list behind a sheet in its colours as they now are (the sheet left as it is).
-function recolour()
+// The list's entries, and its "Show completed" line, as they now are (the rest of it left as it is).
+function refreshList()
+{
+    const l = current(), sheet = app.querySelector("#over .sheet");
+    if (!l || !sheet || editing) return show();
+    redrawEntries();
+    const hidden = l.rows.filter(r => r.done).length, line = sheet.querySelector(".note-line");
+    if (!hidden && line) line.remove();
+    else if (hidden && line) line.textContent = l.showDone ? "Hide completed" : "Show " + hidden + " completed";
+    else if (hidden)
+    {
+        const b = element('<button class="note-line" data-do="showdone">' + (l.showDone ? "Hide completed" : "Show " + hidden + " completed") + "</button>");
+        b.addEventListener("click", ev => act("showdone", null, ev, b));
+        sheet.querySelector(".fade-in").appendChild(b);
+    }
+}
+// The list behind a sheet in its colors as they now are (the sheet left as it is).
+function recolor()
 {
     const l = current(), wrap = app.querySelector("#over .sheet-wrap");
     if (!l || !wrap) return;
@@ -1138,14 +1368,29 @@ function redrawEntries()
     holder.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", ev => act(b.dataset.do, b.dataset.value, ev, b)));
     touchEntries(holder.parentNode);
 }
-function swatches(chosen, colours, does, none)
+function swatches(chosen, colors, does, none)
 {
     return '<div class="swatches">' + (none ? '<button class="swatch none' + (!chosen ? " on" : "") + '" data-do="' + does + '" data-value="" aria-label="' + none + '"></button>' : "")
-        + colours.map(c => '<button class="swatch' + (chosen && chosen.toUpperCase().slice(-6) === c.toUpperCase().slice(-6) ? " on" : "") + '" data-do="' + does + '" data-value="' + c + '" style="background:' + c + '"></button>').join("") + "</div>";
+        + colors.map(c => '<button class="swatch' + (chosen && chosen.toUpperCase().slice(-6) === c.toUpperCase().slice(-6) ? " on" : "") + '" data-do="' + does + '" data-value="' + c + '" style="background:' + c + '"></button>').join("") + "</div>";
 }
 const KIT = ["#EF5EB8", "#DAFF00", "#27FF98", "#5EC8EF", "#8E4DFF", "#FF8A3D", "#E04848", "#1F5A8C", "#428C6A", "#6B6F6E"];   // (with the project's own palette first)
-function colours() { const own = project.base.doc.palette.map(c => "#" + c.replace("#", "").slice(-6)); return [...new Set([...own, ...KIT].map(c => c.toUpperCase()))].slice(0, 16); }
+function colors() { const own = project.base.doc.palette.map(c => "#" + c.replace("#", "").slice(-6)); return [...new Set([...own, ...KIT].map(c => c.toUpperCase()))].slice(0, 16); }
 
+// The entry a menu is for, lit above the shade (and scrolled clear of the menu, if the menu would cover it).
+function lightUp(rowId)
+{
+    app.querySelectorAll("#entries .entry.lit").forEach(o => o.classList.remove("lit"));
+    const el = rowId && app.querySelector('#entries .entry[data-id="' + CSS.escape(rowId) + '"]');
+    if (!el) return;
+    el.classList.add("lit");
+    requestAnimationFrame(() =>
+    {
+        const panel = app.querySelector(".picker .panel"), sheet = app.querySelector("#over .sheet");
+        if (!panel || !sheet) return;
+        const top = panel.getBoundingClientRect().top - 16, b = el.getBoundingClientRect();
+        if (b.bottom > top) sheet.scrollBy({ top: b.bottom - top, behavior: calm ? "auto" : "smooth" });
+    });
+}
 function entryMenu(rowId)
 {
     const kinds = [["T", "Task"], ["N", "Note"], ["H", "Heading"], ["D", "Divider"]];
@@ -1155,21 +1400,22 @@ function entryMenu(rowId)
     {
         const r = row();
         if (!r) return "";
-        return '<div class="ptitle">' + (text(cnpy.plain(r.text).slice(0, 60)) || (r.kind === "D" ? "Divider" : "Entry")) + "</div>"
-            + '<div class="segments">' + kinds.map(k => '<button class="' + (k[0] === r.kind ? "on" : "") + '" data-do="kind" data-value="' + k[0] + '">' + k[1] + "</button>").join("") + "</div>"
-            + (r.kind === "T" ? '<div class="section">Checkbox colour</div>' + swatches(r.color, colours(), "boxcolor", "The list's own") : "")
-            + (r.kind !== "D" ? '<button class="pick" data-do="linkto"><span>' + (r.link ? "Change link…" : "Link to a board or object…") + "</span>" + icon("link", 18) + "</button>" : "")
-            + (r.link && r.kind !== "D" ? '<button class="pick" data-do="unlink"><span>Remove link</span></button>' : "")
-            + '<button class="pick danger" data-do="delete"><span>Delete</span></button>';
+        return '<div class="segments">' + kinds.map(k => '<button class="' + (k[0] === r.kind ? "on" : "") + '" data-do="kind" data-value="' + k[0] + '">' + k[1] + "</button>").join("") + "</div>"
+            + (r.kind === "T" ? '<div class="section">Checkbox color</div>' + swatches(r.color, colors(), "boxcolor", "The list's own") : "")
+            + '<div class="actions">'
+            + (r.kind !== "D" ? '<button class="action" data-do="linkto">' + icon("link", 18) + "<span>" + (r.link ? "Change link" : "Link") + "</span></button>" : "")
+            + (r.link && r.kind !== "D" ? '<button class="action" data-do="unlink"><span>Unlink</span></button>' : "")
+            + '<button class="action danger" data-do="delete">' + icon("trash", 18) + "<span>Delete</span></button></div>";
     };
+    lightUp(rowId);
     sheetUp(build, (does, value, close, again) =>
     {
-        // Its kind and colour change as they are picked, the sheet staying open to pick more.
+        // Its kind and color change as they are picked, the sheet staying open to pick more.
         // (A divider keeps its words and link, unseen, for being made a task again.)
-        if (does === "kind") { if (row().kind === value) return; step({ t: "set", id: rowId, fields: value === "T" ? { kind: value } : { kind: value, done: false } }); again(); redrawEntries(); }
-        else if (does === "boxcolor") { step({ t: "set", id: rowId, fields: { color: value || null } }); again(); redrawEntries(); }
-        else if (does === "unlink") { step({ t: "set", id: rowId, fields: { link: null } }); again(); redrawEntries(); }
-        else if (does === "delete") { step({ t: "del", id: rowId }); close(); }
+        if (does === "kind") { if (row().kind === value) return; step({ t: "set", id: rowId, fields: value === "T" ? { kind: value } : { kind: value, done: false } }); again(); redrawEntries(); lightUp(rowId); }
+        else if (does === "boxcolor") { step({ t: "set", id: rowId, fields: { color: value || null } }); again(); redrawEntries(); lightUp(rowId); }
+        else if (does === "unlink") { step({ t: "set", id: rowId, fields: { link: null } }); again(); redrawEntries(); lightUp(rowId); }
+        else if (does === "delete") { step({ t: "del", id: rowId }); feel.gone(); close(() => { refreshList(); undoable(); }); }
         else if (does === "linkto") close(() => { show(); pickLink(rowId); });
     });
 }
@@ -1200,29 +1446,28 @@ function pickLink(rowId)
     const build = () => '<div class="ptitle">Link “' + text(cnpy.plain(r.text).slice(0, 40)) + '” to…</div><div class="scroll">'
         + ["Board", null].map(k => { const these = all.filter(t => k ? t.kind === k : t.kind !== "Board"); return these.length ? '<div class="section">' + (k ? "Boards" : "Objects") + "</div>" + these.map(t => '<button class="pick' + (t.id === r.link ? " on" : "") + '" data-do="link" data-value="' + text(t.id) + '"><span>' + text(t.name) + '</span><span class="kind-name">' + t.kind + "</span></button>").join("") : ""; }).join("")
         + (all.length ? "" : '<div class="empty">Nothing to link to yet</div>') + "</div>";
-    sheetUp(build, (does, value, close) => { if (does === "link") { step({ t: "set", id: rowId, fields: { link: value } }); close(); } });
+    sheetUp(build, (does, value, close) => { if (does === "link") { step({ t: "set", id: rowId, fields: { link: value } }); close(() => { refreshList(); undoable(); }); } });
 }
 
-// The list's own options: its colour (the stripe made from it), showing what's done, deleting it.
+// The list's own options: its color (the stripe made from it), showing what's done, deleting it.
 function listMenu()
 {
     finishTyping(false, false);
     const build = () =>
     {
     const l = current();
-    return '<div class="ptitle">' + (text(l.name) || "Untitled list") + "</div>"
-        + '<div class="section">List colour</div>' + swatches(l.fill, colours(), "fill", "The theme's")
-        + '<div class="section">Stripe colour</div>' + swatches(l.ink, colours(), "ink", null)
-        + '<button class="pick" data-do="done"><span>' + (l.showDone ? "Hide completed" : "Show completed") + "</span></button>"
-        + '<button class="pick danger" data-do="dellist"><span>' + (sure ? "Tap again to delete “" + text(l.name || "this list") + "”" : "Delete list") + "</span></button>";
+    return '<div class="section first">List color</div>' + swatches(l.fill, colors(), "fill", "The theme's")
+        + '<div class="section">Band color</div>' + swatches(l.ink, colors(), "ink", null)
+        + '<div class="actions"><button class="action" data-do="done"><span>' + (l.showDone ? "Hide completed" : "Show completed") + "</span></button>"
+        + '<button class="action danger' + (sure ? " sure" : "") + '" data-do="dellist">' + icon("trash", 18) + "<span>" + (sure ? "Tap again to delete" : "Delete list") + "</span></button></div>";
     };
     let sure = false;
     sheetUp(build, (does, value, close, again) =>
     {
-        // Colours and showing what's done change as they are picked, the list behind with them; the sheet stays.
+        // Colors and showing what's done change as they are picked, the list behind with them; the sheet stays.
         const l = current();
-        if (does === "fill") { step({ t: "listset", fields: value ? { fill: value, ink: render.bright(value) } : { fill: null } }); again(); recolour(); }
-        else if (does === "ink") { step({ t: "listset", fields: { ink: value } }); again(); recolour(); }
+        if (does === "fill") { step({ t: "listset", fields: value ? { fill: value, ink: render.bright(value) } : { fill: null } }); again(); recolor(); }
+        else if (does === "ink") { step({ t: "listset", fields: { ink: value } }); again(); recolor(); }
         else if (does === "done") { step({ t: "listset", fields: { showDone: !l.showDone } }); again(); redrawEntries(); }
         else if (does === "dellist")
         {
@@ -1237,7 +1482,7 @@ function follow(id)
     finishTyping(false, false);
     const sc = project.scene, to = render.linked(sc, id);
     if (!to) { problem = "What it linked to isn't in the project any more."; return show(); }
-    if (to.board) { open = { kind: "board", id: to.board.id }; show(); grow(app.querySelector("#over .board-wrap"), null); return; }
+    if (to.board) { openBoard(to.board.id, null); return; }
     if (to.item && to.item.kind === "list") { openList(to.item.id, null); return; }
     open = null; tab = "canvas"; remember("canopy.tab", tab);
     show();
@@ -1248,13 +1493,19 @@ function follow(id)
 function accountMenu()
 {
     const build = () => '<div class="ptitle">' + (dbx.who() ? "Signed in as " + text(dbx.who()) : "Signed in to Dropbox") + "</div>"
-        + '<button class="pick" data-do="sound"><span>Sounds</span><span class="kind-name">' + (sound ? "On" : "Off") + "</span></button>"
+        + '<button class="pick" data-do="sound" role="switch" aria-checked="' + sound + '"><span>Sounds</span><span class="switch' + (sound ? " on" : "") + '"><i></i></span></button>'
         + '<button class="pick" data-do="local"><span>Open a project from this phone</span></button>'
         + '<div class="hint">Changes to a project opened from the phone stay on it until you save a copy.</div>'
         + '<button class="pick danger" data-do="signout"><span>Sign out</span></button>';
     sheetUp(build, (does, value, close, again) =>
     {
-        if (does === "sound") { sound = !sound; remember("canopy.sound", sound); click(1100, true); again(); }
+        if (does === "sound")
+        {
+            // (flipped where it is, so it slides)
+            sound = !sound; remember("canopy.sound", sound); click(1100, true); buzz(6);
+            const b = app.querySelector('.picker [data-do="sound"]');
+            if (b) { b.setAttribute("aria-checked", String(sound)); b.querySelector(".switch").classList.toggle("on", sound); }
+        }
         else if (does === "local") { const pk = app.querySelector("#picker"); if (pk) pk.click(); close(() => { }); }   // (asked for at once: a phone only shows its files for a tap)
         else if (does === "signout") close(() => { dbx.signOut(); project = null; show(); });
     });
@@ -1292,28 +1543,19 @@ function act(what, value, ev, el)
     {
         case "signin": dbx.signIn(); break;
         case "account": accountMenu(); break;
-        case "home": if (folder !== "") { back.push(folder); ahead = []; folder = ""; remember("canopy.folder", folder); } window.scrollTo(0, 0); showFiles(); break;
-        case "back":
-            if (back.length) { ahead.push(folder); folder = back.pop(); }
-            else if (folder !== "") { ahead.push(folder); folder = folder.split("/").slice(0, -1).join("/"); }   // (opened here: back is up a folder)
-            remember("canopy.folder", folder); showFiles();
-            break;
-        case "ahead": if (ahead.length) { back.push(folder); folder = ahead.pop(); remember("canopy.folder", folder); showFiles(); } break;
+        case "home": if (folder !== "") go({ files: "" }); else { window.scrollTo({ top: 0, behavior: "smooth" }); } break;
+        case "back": goBack(); break;
+        case "ahead": history.forward(); break;
         case "undo": undoRedo(false); break;
         case "redo": undoRedo(true); break;
         case "pick": app.querySelector("#picker").click(); break;
-        case "into": back.push(folder); ahead = []; folder = value; remember("canopy.folder", folder); showFiles(); break;
-        case "open": openPath(value); break;
-        case "files":
-            closeViewers();
-            if (project && project.steps.length && !project.local) save();   // (still saving: it carries on)
-            if (project && !project.steps.length) render.forget(project.cache);   // (its pictures let go)
-            project = null; open = null; problem = ""; show();
-            break;
+        case "into": go({ files: value }); break;
+        case "open": go({ project: value }); break;
+        case "files": goBack(); break;
         case "tab": if (value === tab && !open) { if (tab === "canvas") fitAll(true); break; } finishTyping(false, false); open = null; tab = value; remember("canopy.tab", tab); show(); break;
-        case "list": openList(value, el); break;
-        case "board": openBoard(value, el); break;
-        case "close": closeOver(); break;
+        case "list": go({ project: project.path, local: project.local, open: { kind: "list", id: value } }, el); break;
+        case "board": go({ project: project.path, local: project.local, open: { kind: "board", id: value } }, el); break;
+        case "close": goBack(); break;
         case "fitall": fitAll(true); break;
         case "fitboard": { const b = project.scene.boards.find(o => o.id === open.id); if (b && boardView) boardView.fit(b, 0.04, true); break; }
         case "refresh": save(); catchUp(false); break;
@@ -1336,8 +1578,9 @@ function act(what, value, ev, el)
         {
             const r = current().rows.find(o => o.id === value);
             if (r) { step({ t: "set", id: r.id, fields: { done: !r.done } }); if (r.done) feel.untick(); else feel.tick(); }
-            show();
-            const box = app.querySelector('.entry[data-id="' + CSS.escape(value) + '"] .check span');
+            refreshList();
+            const row = app.querySelector('.entry[data-id="' + CSS.escape(value) + '"]'), box = row && row.querySelector(".check span");
+            if (row && !calm) row.animate([{ transform: "scale(.965)" }, { transform: "scale(1.012)" }, { transform: "none" }], { duration: 300, easing: "cubic-bezier(.2,.9,.3,1.2)" });
             if (box && !calm) box.animate([{ transform: "scale(.6)" }, { transform: "scale(1.18)" }, { transform: "scale(1)" }], { duration: 260, easing: "cubic-bezier(.2,.9,.3,1.3)" });
             break;
         }
@@ -1349,6 +1592,7 @@ function act(what, value, ev, el)
             break;
         case "add":
         {
+            click(1050, true); buzz(6);
             if (editing) finishTyping(false, false);
             const l = current(), last = l.rows.length ? l.rows[l.rows.length - 1].id : null;
             if (value === "D") { step({ t: "add", row: { id: cnpy.newId(), kind: "D", done: false, color: null, text: "", link: null }, after: last }); show(); break; }
@@ -1356,7 +1600,7 @@ function act(what, value, ev, el)
             show();
             break;
         }
-        case "showdone": step({ t: "listset", fields: { showDone: !current().showDone } }); show(); break;
+        case "showdone": step({ t: "listset", fields: { showDone: !current().showDone } }); feel.drop(); refreshList(); break;
         case "listmenu": listMenu(); break;
     }
 }
@@ -1369,6 +1613,52 @@ document.addEventListener("keydown", e =>
     if (k === "z") { e.preventDefault(); undoRedo(e.shiftKey); }
     else if (k === "y") { e.preventDefault(); undoRedo(true); }
 });
+
+// ---- added to the home screen (no browser round it, so no browser swipe): a swipe in from the left edge goes back,
+// from the right edge forward, as a browser's would; an arrow comes in with the finger, and it goes once past it ----
+
+const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+if (standalone)
+{
+    let edge = null;
+    document.addEventListener("touchstart", e =>
+    {
+        const t = e.touches[0];
+        if (e.touches.length !== 1 || sheetOpen() || e.target.closest(".stage")) return;   // (the canvas drags itself)
+        const fromLeft = t.clientX < 22, fromRight = t.clientX > innerWidth - 22;
+        if (!fromLeft && !fromRight) return;
+        if (fromRight && (history.state && history.state.at || 0) >= furthest()) return;   // (nothing ahead)
+        edge = { x0: t.clientX, y0: t.clientY, back: fromLeft, on: false, mark: null };
+    }, { passive: true });
+    document.addEventListener("touchmove", e =>
+    {
+        if (!edge) return;
+        const t = e.touches[0], dx = (t.clientX - edge.x0) * (edge.back ? 1 : -1), dy = t.clientY - edge.y0;
+        if (!edge.on) { if (dx > 10 && dx > Math.abs(dy)) edge.on = true; else if (Math.abs(dy) > 10) { edge = null; return; } else return; }
+        e.preventDefault();
+        if (!edge.mark)
+        {
+            edge.mark = element('<div class="edge-mark' + (edge.back ? "" : " ahead") + '">' + icon(edge.back ? "back" : "forward", 20) + "</div>");
+            document.body.appendChild(edge.mark);
+            edge.mark.style.top = Math.max(60, Math.min(innerHeight - 60, t.clientY)) - 22 + "px";
+        }
+        const k = Math.min(1, dx / 90), was = edge.ready;
+        edge.ready = k >= 1;
+        edge.mark.style.transform = "translateX(" + (edge.back ? 1 : -1) * (Math.min(dx, 120) * 0.6 - 30) + "px) scale(" + (0.7 + 0.3 * k) + ")";
+        edge.mark.style.opacity = String(0.3 + 0.7 * k);
+        edge.mark.classList.toggle("ready", edge.ready);
+        if (edge.ready && !was) buzz(6);
+    }, { passive: false });
+    const lift = () =>
+    {
+        if (!edge) return;
+        const e = edge; edge = null;
+        if (e.mark) { e.mark.style.transition = "opacity .15s"; e.mark.style.opacity = "0"; setTimeout(() => e.mark.remove(), 160); }
+        if (e.ready) { if (e.back) goBack(); else history.forward(); }
+    };
+    document.addEventListener("touchend", lift);
+    document.addEventListener("touchcancel", lift);
+}
 
 // ---- starting ----
 
@@ -1391,5 +1681,6 @@ if (location.hostname === "localhost") window.__project = () => project;   // (f
     await freshKey();
     try { await dbx.finish(); }
     catch (e) { problem = e.message; }
+    if (!history.state) history.replaceState({ at: 0, files: folder }, "");
     show();
 })();

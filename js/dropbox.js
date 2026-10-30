@@ -34,7 +34,7 @@ export async function finish()
     const q = new URLSearchParams(location.search);
     if (!q.has("code") && !q.has("error")) return false;
     history.replaceState(null, "", back());
-    if (q.has("error")) throw new Error(q.get("error_description") || "Dropbox sign-in was cancelled.");
+    if (q.has("error")) throw new Error(q.get("error_description") || "Dropbox sign-in was canceled.");
     const verifier = sessionStorage.getItem("canopy.verifier");
     sessionStorage.removeItem("canopy.verifier");
     const got = await tokenCall({ code: q.get("code"), grant_type: "authorization_code", code_verifier: verifier, client_id: key(), redirect_uri: back() });
