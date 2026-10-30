@@ -8,6 +8,7 @@ import * as render from "./render.js";
 import { Viewer, thumbnail } from "./viewer.js";
 import { boardIcons } from "./icons.js";
 import { themes, sizes } from "./look.js";
+import { VERSION } from "./version.js";
 
 const app = document.getElementById("app");
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -217,7 +218,8 @@ async function showFiles()
         + heading("here", folder === "" ? "Dropbox" : folder.split("/").pop())
         + (folder !== "" && !folded().includes("here") ? '<div class="where">' + ["Dropbox"].concat(folder.split("/").filter(Boolean)).map(text).join(" / ") + "</div>" : "")
         + '<div class="rows" id="items"><div class="empty">Loading…</div></div>'
-        + '<input class="hidden-input" type="file" id="picker"></main>';
+        + '<input class="hidden-input" type="file" id="picker">'
+        + '<div class="version">Canopy Web Viewer ' + VERSION + "</div></main>";
     wire();
     arrangePins();
     let items;
@@ -523,9 +525,10 @@ function showProject()
 }
 
 // Two columns, each card going into the shorter one (so they sit together however tall they are).
-function masonry(holder, cards)
+let oneColumn = remembered("canopy.onecolumn", false);   // the lists in one column (the account menu's)
+function masonry(holder, cards, single)
 {
-    const wide = Math.min(holder.clientWidth || innerWidth, 1100), n = wide >= 1000 ? 4 : wide >= 720 ? 3 : 2;   // (more columns on a wider screen)
+    const wide = Math.min(holder.clientWidth || innerWidth, 1100), n = single ? 1 : wide >= 1000 ? 4 : wide >= 720 ? 3 : 2;   // (more columns on a wider screen)
     holder.innerHTML = '<div class="masonry">' + '<div class="col"></div>'.repeat(n) + "</div>";
     const cols = holder.querySelectorAll(".col"), heights = new Array(n).fill(0);
     for (const c of cards)
@@ -543,7 +546,7 @@ function showLists(holder)
     const lists = sortedLists();
     if (lists.length === 0) { holder.innerHTML = '<div class="empty big">No lists in this project yet' + (project.base.doc.readOnly ? "" : '<br><button class="quiet-button" data-do="newlist">New list</button>') + "</div>"; wire(holder); return; }
     const cards = lists.map(l => ({ id: l.id, el: element(listCard(l)), weight: 3 + Math.min(4, visible(l).length) * 1.1 }));
-    masonry(holder, cards);
+    masonry(holder, cards, oneColumn);
     if (!project.base.doc.readOnly) arrangeCards(holder, cards);
     if (project.base.doc.readOnly) holder.insertAdjacentHTML("afterbegin", '<div class="problem">This project was saved by an older version of Canopy Board, so it can be looked at here but not changed. Open and save it in Canopy Board to update it.</div>');
     if (problem) holder.insertAdjacentHTML("afterbegin", '<div class="problem">' + text(problem) + "</div>");
@@ -609,7 +612,7 @@ function arrangeCards(holder, cards)
         {
             // (each card slides from where it was to where it now is)
             const was = new Map(order.map(o => [o, o.el.getBoundingClientRect()]));
-            masonry(holder, order);
+            masonry(holder, order, oneColumn);
             if (calm) return;
             for (const o of order)
             {
@@ -690,11 +693,38 @@ function showCanvas(holder, fresh)
         canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, pictureGetter(), null);
         editable(canvasView);
         canvasView.onFitAll = () => fitAll(true);
+        measure(holder.querySelector(".stage"));
         if (location.hostname === "localhost") window.__view = () => canvasView;   // (for checking it on this computer)
         const cam = remembered("canopy.cam." + project.path, null);
         if (cam && fresh) { canvasView.cam = cam; canvasView.redraw(); } else fitAll(false);
     }
     else canvasView.redraw();
+}
+// The measuring readout (the address ending ?measure): what drawing and the pictures cost on this phone, as it goes.
+const measuring = new URLSearchParams(location.search).has("measure");
+function measure(stage)
+{
+    if (!measuring || !stage) return;
+    const box = element('<div class="measure"></div>');
+    stage.appendChild(box);
+    const tick = () =>
+    {
+        if (!box.isConnected) return;
+        const st = render.stats, now = performance.now(), recent = st.draws.filter(d => now - d.at < 2000), ms = st.draws.slice(-20).map(d => d.ms);
+        const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 0, worst = ms.length ? Math.max(...ms) : 0;
+        const c = project && project.cache, seen = c ? [...c.seen.values()] : [];
+        const dm = st.decodeMs.length ? st.decodeMs.reduce((a, b) => a + b, 0) / st.decodeMs.length : 0;
+        const v = canvasView || boardView, items = project ? project.scene.items : [];
+        box.textContent = [
+            "Drawing: " + avg.toFixed(0) + " ms average, " + worst.toFixed(0) + " ms worst (last 20), " + (recent.length / 2).toFixed(1) + " a second",
+            "Pictures: " + seen.filter(e => e.img).length + " held of " + items.filter(o => o.kind === "image").length + " images and " + items.filter(o => o.kind === "paint").length + " drawings",
+            "Memory: " + (c ? (c.pixels / 1e6).toFixed(1) : 0) + " of 48 megapixels; widest " + st.widest + " px",
+            "Decoded " + st.decoded + " (" + dm.toFixed(0) + " ms each); waiting " + (c ? c.queue.length + c.busy : 0) + "; let go " + st.dropped + "; failed " + st.failed,
+            "Zoom " + (v ? (v.cam.s * 100).toFixed(0) : "?") + "%, screen " + (v ? v.w + " \u00d7 " + v.h + " at " + v.dpr + "x" : "?") + (navigator.deviceMemory ? ", " + navigator.deviceMemory + " GB" : "")
+        ].join("\n");
+        setTimeout(tick, 500);
+    };
+    tick();
 }
 function fitAll(glide) { if (canvasView) canvasView.fit(render.extent(project.scene), 0.06, glide); }
 // ---- objects picked on the canvas (or in a board): moved by dragging, sized by a corner, deleted ----
@@ -741,11 +771,12 @@ function pick(p, v)
     v.redraw();
     tools(v);
 }
-// The handles: the picked box's corners, on the screen.
+// The handles: the picked box's corners, on the screen (none with a list in it: lists are one size, moved only).
+function sizable() { return !!picked && !project.scene.items.some(o => picked.ids.includes(o.id) && o.kind === "list"); }
 function corners(v)
 {
     const b = pickedBox();
-    if (!b) return [];
+    if (!b || !sizable()) return [];
     const a = v.toScreen(b.x, b.y), c = v.toScreen(b.x + b.w, b.y + b.h);
     return [{ x: a.x, y: a.y, ax: b.x + b.w, ay: b.y + b.h }, { x: c.x, y: a.y, ax: b.x, ay: b.y + b.h }, { x: a.x, y: c.y, ax: b.x + b.w, ay: b.y }, { x: c.x, y: c.y, ax: b.x, ay: b.y }];
 }
@@ -1030,6 +1061,7 @@ function showBoard(over)
         editable(boardView);
         boardView.onFitAll = () => boardView.fit(b, 0.04, true);
         boardView.fit(b, 0.04, false);
+        measure(wrap.querySelector(".stage"));
     }
     else boardView.redraw();
     const head = wrap.querySelector(".head");
@@ -1761,12 +1793,20 @@ function accountMenu()
     const build = () => '<div class="ptitle">' + (dbx.who() ? "Signed in as " + text(dbx.who()) : "Signed in to Dropbox") + "</div>"
         + '<div class="section first">Theme</div><div class="themes">' + Object.keys(themes).map(n => '<button class="theme' + (n === theme ? " on" : "") + '" data-do="theme" data-value="' + n + '" style="--a:' + themes[n].colors.Accent + ";--c:" + themes[n].colors.Card + '"><i></i><span>' + n + "</span></button>").join("") + "</div>"
         + '<div class="section">Other</div>'
+        + '<button class="pick" data-do="onecolumn" role="switch" aria-checked="' + oneColumn + '"><span>Lists in one column</span><span class="switch' + (oneColumn ? " on" : "") + '"><i></i></span></button>'
         + '<button class="pick" data-do="sound" role="switch" aria-checked="' + sound + '"><span>Sounds</span><span class="switch' + (sound ? " on" : "") + '"><i></i></span></button>'
         + '<button class="pick" data-do="local"><span>Open a project from this phone</span></button>'
         + '<div class="hint">Changes to a project opened from the phone stay on it until you save a copy.</div>'
         + '<button class="pick danger" data-do="signout"><span>Sign out</span></button>';
     sheetUp(build, (does, value, close, again) =>
     {
+        if (does === "onecolumn")
+        {
+            oneColumn = !oneColumn; remember("canopy.onecolumn", oneColumn); click(1100, true); buzz(6);
+            const b = app.querySelector('.picker [data-do="onecolumn"]');
+            if (b) { b.setAttribute("aria-checked", String(oneColumn)); b.querySelector(".switch").classList.toggle("on", oneColumn); }
+            return;
+        }
         if (does === "theme") { applyTheme(value); remember("canopy.theme", value); click(1100, true); again(); return; }
         if (does === "sound")
         {
@@ -1942,6 +1982,33 @@ if (standalone)
     document.addEventListener("touchcancel", lift);
 }
 
+// ---- a newer version published: said so, and taken on a tap (each file fetched fresh first, so the phone doesn't
+// keep any of the old ones) ----
+
+const FILES = ["index.html", "app.css", "js/app.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/version.js"];
+let newer = null;
+async function checkVersion()
+{
+    try
+    {
+        const t = await (await fetch("js/version.js?at=" + Date.now(), { cache: "no-store" })).text(), m = t.match(/VERSION\s*=\s*"([^"]+)"/);
+        if (!m || m[1] === VERSION || m[1] === newer) return;
+        newer = m[1];
+        const note = element('<button class="update">Version ' + text(newer) + " is ready \u2014 tap to update</button>");
+        note.addEventListener("click", async () =>
+        {
+            note.textContent = "Updating\u2026";
+            await Promise.all(FILES.map(f => fetch(f, { cache: "reload" }).catch(() => { })));
+            location.reload();
+        });
+        document.body.appendChild(note);
+        if (!calm) note.animate([{ transform: "translate(-50%, 20px)", opacity: 0 }, { transform: "translate(-50%, 0)", opacity: 1 }], { duration: 260, easing: "cubic-bezier(.2,1.2,.3,1)" });
+    }
+    catch (e) { }   // (offline: asked again later)
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkVersion(); });
+setInterval(checkVersion, 5 * 60 * 1000);
+
 // ---- starting ----
 
 // The Dropbox key fetched fresh (a browser may hold on to an older copy of config.js for a while).
@@ -1965,4 +2032,5 @@ if (location.hostname === "localhost") window.__project = () => project;   // (f
     catch (e) { problem = e.message; }
     if (!history.state) history.replaceState({ at: 0, files: folder }, "");
     show();
+    checkVersion();
 })();

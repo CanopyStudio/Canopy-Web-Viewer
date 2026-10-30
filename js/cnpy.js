@@ -65,7 +65,8 @@ function readBody(key, rest, meta, ver)
     }
     else if (key === "list")
     {
-        Object.assign(o, { kind: "list", x: num(f[0]), y: num(f[1]), w: num(f[2]) || 340, scale: num(f[3]) || 1, ink: col(f[4]), showDone: f[5] === "1", name: unescape(f[6] || ""), fill: f.length > 7 ? col(f[7]) : null, rows: [] });
+        // (every list the one size, as the desktop app now has them: its size as saved kept, to be put right as it's saved)
+        Object.assign(o, { kind: "list", x: num(f[0]), y: num(f[1]), w: LIST_W, scale: 1, savedW: num(f[2]), savedScale: num(f[3]) || 1, ink: col(f[4]), showDone: f[5] === "1", name: unescape(f[6] || ""), fill: f.length > 7 ? col(f[7]) : null, rows: [] });
     }
     else if (key === "type")
     {
@@ -186,13 +187,16 @@ export function lockers(doc, o, view) { return !o.group || doc.locks.size === 0 
 // ---- moving and sizing: p' = p * k + (ox, oy), as a step leaves an object ----
 
 // An object moved so (a copy, for drawing).
+// A list's width: every list is this wide, at its own scale (1), growing only downward as it fills.
+export const LIST_W = 360;
 export function placed(o, t)
 {
     const q = { ...o }, X = v => v * t.k + t.ox, Y = v => v * t.k + t.oy;
     delete q._path; delete q._layout;
     if (o.kind === "line" || o.kind === "arrow") { q.ax = X(o.ax); q.ay = Y(o.ay); q.bx = X(o.bx); q.by = Y(o.by); }
-    q.x = X(o.x); q.y = Y(o.y); q.w = o.w * t.k; q.h = o.h * t.k;
-    if (o.kind === "list") q.scale = (o.scale || 1) * t.k;
+    q.x = X(o.x); q.y = Y(o.y);
+    if (o.kind === "list") return q;   // (a list is moved, never sized)
+    q.w = o.w * t.k; q.h = o.h * t.k;
     if (o.kind === "type") { q.size = o.size * t.k; if (o.leading > 0) q.leading = o.leading * t.k; }
     return q;
 }
@@ -203,9 +207,9 @@ function placedLine(line, o, t)
     const X = v => n(num(v) * t.k + t.ox), Y = v => n(num(v) * t.k + t.oy), K = v => n(num(v) * t.k);
     const at = key === "image" || key === "item" || key === "paint" || key === "shape" ? 1 : 0;
     f[at] = X(f[at]); f[at + 1] = Y(f[at + 1]);
+    if (key === "list") return key + " " + f.join("|");   // (moved only)
     if (key === "shape" && (f[0] === "L" || f[0] === "A")) { f[3] = X(f[3]); f[4] = Y(f[4]); }
-    else { f[at + 2] = K(f[at + 2]); if (key !== "list") f[at + 3] = K(f[at + 3]); }
-    if (key === "list") f[3] = K(f[3] || 1);
+    else { f[at + 2] = K(f[at + 2]); f[at + 3] = K(f[at + 3]); }
     if (key === "type") { f[4] = K(f[4]); if (num(f[5]) > 0) f[5] = K(f[5]); }
     return key + " " + f.join("|");
 }
@@ -241,7 +245,7 @@ export function write(doc, view)
         const now = byId.get(o.id);
         if (!now) continue;
         cuts.push({ from: o.start, to: o.end, put: now.rows.map(rowLine) });
-        if (now.name !== o.name || now.ink !== o.ink || now.fill !== o.fill || now.showDone !== o.showDone || now.x !== o.x || now.y !== o.y || now.w !== o.w || now.scale !== o.scale)
+        if (now.name !== o.name || now.ink !== o.ink || now.fill !== o.fill || now.showDone !== o.showDone || now.x !== o.x || now.y !== o.y || o.savedW !== LIST_W || o.savedScale !== 1)
         {
             // Its own line: its place, size, name, colors and showing what's done as they are now.
             const f = lines[o.line].substring(5).split("|");
@@ -382,7 +386,7 @@ export function apply(doc, steps)
             }
             continue;
         }
-        if (s.t === "newlist") { if (!ids.has(s.list)) lists.push({ id: s.list, kind: "list", fresh: true, x: s.x, y: s.y, w: 340, scale: 1, ink: "#DAFF00", fill: null, showDone: true, name: s.name, rows: [], layer: s.layer, author: s.author, group: s.layer ? s.layer.id : null, groupName: s.layer ? s.layer.name : "" }); continue; }
+        if (s.t === "newlist") { if (!ids.has(s.list)) lists.push({ id: s.list, kind: "list", fresh: true, x: s.x, y: s.y, w: LIST_W, scale: 1, ink: "#DAFF00", fill: null, showDone: true, name: s.name, rows: [], layer: s.layer, author: s.author, group: s.layer ? s.layer.id : null, groupName: s.layer ? s.layer.name : "" }); continue; }
         if (s.t === "photo") { if (!ids.has(s.id)) photos.push({ ...s.photo, id: s.id }); continue; }
         const l = lists.find(o => o.id === s.list);
         if (!l) continue;

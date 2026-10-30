@@ -82,6 +82,8 @@ function wantFont(family, weight, italic, redraw)
 // and the ones not shown lately let go once they add up to too much. So a board of big photos fits in a phone's memory.
 // "cache": one per project, kept as the file is saved and read again (its pictures don't change).
 const BUDGET = 48e6, STEPS = [256, 512, 1024, 2048, 3072];
+// What the pictures and drawing are costing, for the measuring readout (?measure on the address).
+export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0 };
 export function cache() { return { seen: new Map(), busy: 0, queue: [], pixels: 0, frame: 0 }; }
 export function forget(c) { if (!c) return; for (const e of c.seen.values()) { if (e.img) e.img.close(); e.img = null; e.closed = true; } c.seen.clear(); c.pixels = 0; c.queue.length = 0; }
 export function pictures(doc, added, redraw, c)
@@ -97,15 +99,17 @@ export function pictures(doc, added, redraw, c)
             const bytes = bytesOf(job.file);
             if (!bytes) { e.none = true; continue; }
             c.busy++;
+            const t0 = performance.now();
             bytes.then(b => decode(b, job.side)).then(got =>
             {
                 if (e.closed) { got.img.close(); return; }   // (let go meanwhile)
                 if (e.img) { c.pixels -= e.img.width * e.img.height; e.img.close(); }
                 e.img = got.img; e.k = got.k; e.side = job.side; e.full = got.full; e.src = got.src;
                 c.pixels += got.img.width * got.img.height;
+                stats.decoded++; stats.decodeMs.push(performance.now() - t0); if (stats.decodeMs.length > 30) stats.decodeMs.shift(); stats.widest = Math.max(stats.widest, got.img.width, got.img.height);
                 trim(c);
                 redraw();
-            }).catch(() => { e.none = true; }).finally(() => { e.wanted = 0; c.busy--; next(); });
+            }).catch(() => { e.none = true; stats.failed++; }).finally(() => { e.wanted = 0; c.busy--; next(); });
         }
     };
     // "want": how many pixels across it is drawn (its longer side), or none for its own size.
@@ -131,7 +135,7 @@ function trim(c)
     for (const [file, e] of old)
     {
         if (c.pixels <= BUDGET * 0.8) break;
-        c.pixels -= e.img.width * e.img.height; e.img.close(); e.img = null; e.closed = true; c.seen.delete(file);
+        c.pixels -= e.img.width * e.img.height; e.img.close(); e.img = null; e.closed = true; c.seen.delete(file); stats.dropped++;
     }
 }
 // A picture decoded no bigger than "side" across; with how much smaller than itself it is ("k") and whether it is whole.

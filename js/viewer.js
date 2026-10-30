@@ -51,7 +51,9 @@ export class Viewer
             if (!sc || !this.canvas.isConnected) return;   // (gone since it was asked for)
             // (moving: pictures scaled quickly; drawn well again once it stops)
             const fast = performance.now() < this.movingUntil;
+            const t0 = performance.now();
             render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
+            render.stats.draws.push({ at: t0, ms: performance.now() - t0 }); if (render.stats.draws.length > 60) render.stats.draws.shift();
             clearTimeout(this.sharpen);
             if (fast) this.sharpen = setTimeout(() => this.redraw(), 160);
             if (this.overlay) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
