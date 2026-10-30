@@ -108,7 +108,7 @@ export function pictures(doc, added, redraw, c)
             {
                 if (e.closed) { got.img.close(); return; }   // (let go meanwhile)
                 if (e.img) { c.pixels -= e.img.width * e.img.height; e.img.close(); }
-                e.img = got.img; e.k = got.k; e.side = job.side; e.full = got.full; e.src = got.src;
+                e.img = got.img; e.k = got.k; e.side = job.side; e.full = got.full; e.src = got.src; e.from = got.from || (job.side > SMALL ? "the original" : "the original, made small"); e.blank = blank(got.img);
                 c.pixels += got.img.width * got.img.height;
                 stats.decoded++; stats.decodeMs.push(performance.now() - t0); if (stats.decodeMs.length > 30) stats.decodeMs.shift(); stats.widest = Math.max(stats.widest, got.img.width, got.img.height);
                 trim(c);
@@ -141,12 +141,12 @@ export function pictures(doc, added, redraw, c)
     async function small(file, bytes)
     {
         const pre = doc.zip.file("previews/" + file + ".webp"), size = pre ? (await previewSizes(doc)).get(file) : null;
-        if (pre && size) { const img = await createImageBitmap(new Blob([await pre.async("uint8array")], { type: "image/webp" })); stats.previews++; return { img, k: img.width / size.w, full: false, src: size }; }
+        if (pre && size) { const img = await createImageBitmap(new Blob([await pre.async("uint8array")], { type: "image/webp" })); stats.previews++; return { img, k: img.width / size.w, full: false, src: size, from: "Board's preview in the file" }; }
         const keptCopy = await kept(file);
         if (keptCopy)
         {
             const img = await createImageBitmap(keptCopy.blob);
-            if (!blank(img)) { stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h } }; }
+            if (!blank(img)) { stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h }, from: "the copy kept on this phone" }; }
             img.close();   // (a blank copy: made again below)
         }
         const got = await decode(await bytes, SMALL);
@@ -221,7 +221,7 @@ async function decode(bytes, side)
         const k = Math.min(1, side / Math.max(size.w, size.h)), w = Math.max(1, Math.round(size.w * k)), h = Math.max(1, Math.round(size.h * k));
         const img = await viaPicture(blob, w, h);
         stats.huge++;
-        return { img, k: img.width / size.w, full: false, src: size };
+        return { img, k: img.width / size.w, full: false, src: size, from: "the original, too big for one piece: read another way" };
     }
     if (size && Math.max(size.w, size.h) > side)
     {
@@ -275,6 +275,18 @@ function blank(img)
         return true;
     }
     catch (e) { return false; }
+}
+// What kind of picture its first bytes say it is (for the measuring readout).
+export function kindOf(b)
+{
+    if (!b || b.length < 16) return "?";
+    if (b[0] === 0x89 && b[1] === 0x50) return "PNG";
+    if (b[0] === 0xFF && b[1] === 0xD8) return "JPEG";
+    if (b[0] === 0x47 && b[1] === 0x49) return "GIF";
+    if (b[0] === 0x52 && b[8] === 0x57) return b[15] === 0x4C ? "WebP (lossless)" : b[15] === 0x58 ? "WebP (extended)" : "WebP";
+    if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return "HEIC/AVIF (" + String.fromCharCode(b[8], b[9], b[10], b[11]) + ")";
+    if (b[0] === 0x42 && b[1] === 0x4D) return "BMP";
+    return "unknown (" + [...b.slice(0, 4)].map(x => x.toString(16).padStart(2, "0")).join(" ") + ")";
 }
 // A PNG's, JPEG's, GIF's or WebP's size from its first bytes, or null.
 function sizeOf(b)

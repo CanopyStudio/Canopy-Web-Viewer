@@ -707,6 +707,19 @@ function measure(stage)
     if (!measuring || !stage) return;
     const box = element('<div class="measure"></div>');
     stage.appendChild(box);
+    // A tap: what the picture there is, and how it was got and drawn (the readout shows it until the next tap).
+    const v = canvasView && canvasView.host === stage ? canvasView : boardView;
+    let about = "";
+    if (v)
+    {
+        const tapped = v.onTap;
+        v.onTap = async (x, y) =>
+        {
+            const o = project && render.objectAt(project.scene, x, y, 4 / v.cam.s);
+            about = o ? await describe(o) : "Tapped at " + Math.round(x) + ", " + Math.round(y) + " on the canvas: nothing there";
+            if (tapped) tapped(x, y);
+        };
+    }
     const tick = () =>
     {
         if (!box.isConnected) return;
@@ -714,7 +727,7 @@ function measure(stage)
         const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 0, worst = ms.length ? Math.max(...ms) : 0;
         const c = project && project.cache, seen = c ? [...c.seen.values()] : [];
         const dm = st.decodeMs.length ? st.decodeMs.reduce((a, b) => a + b, 0) / st.decodeMs.length : 0;
-        const v = canvasView || boardView, items = project ? project.scene.items : [];
+        const vw = canvasView || boardView, items = project ? project.scene.items : [];
         box.textContent = [
             "Drawing: " + avg.toFixed(0) + " ms average, " + worst.toFixed(0) + " ms worst (last 20), " + (recent.length / 2).toFixed(1) + " a second",
             "Pictures: " + seen.filter(e => e.img).length + " held of " + items.filter(o => o.kind === "image").length + " images and " + items.filter(o => o.kind === "paint").length + " drawings",
@@ -723,11 +736,27 @@ function measure(stage)
             "Small ones: " + st.previews + " from the file, " + st.kept + " kept on this phone, " + st.made + " made now",
             "On screen still to come: " + st.gaps + "; tried again " + st.retried + "; not in the file " + st.missing,
             "Too big for one piece: " + st.huge + "; came back blank: " + st.blank,
-            "Zoom " + (v ? (v.cam.s * 100).toFixed(0) : "?") + "%, screen " + (v ? v.w + " \u00d7 " + v.h + " at " + v.dpr + "x" : "?") + (navigator.deviceMemory ? ", " + navigator.deviceMemory + " GB" : "")
-        ].join("\n");
+            "Zoom " + (vw ? (vw.cam.s * 100).toFixed(0) : "?") + "%, screen " + (vw ? vw.w + " \u00d7 " + vw.h + " at " + vw.dpr + "x" : "?") + (navigator.deviceMemory ? ", " + navigator.deviceMemory + " GB" : "")
+        ].join("\n") + (about ? "\n\n" + about : "");
         setTimeout(tick, 500);
     };
     tick();
+}
+// One object, as the measuring readout tells it: where it is, and for a picture, everything about how it is shown.
+async function describe(o)
+{
+    const n = v => Math.round(v * 10) / 10, out = [(o.kind === "image" ? "Picture" : o.kind) + " \u201c" + (o.name || "") + "\u201d at " + n(o.x) + ", " + n(o.y) + ", " + n(o.w) + " \u00d7 " + n(o.h)];
+    out.push("Opacity " + (o.opacity === undefined ? 1 : o.opacity) + ", blend " + (o.blend || "normal") + (o.angle ? ", turned " + o.angle : "") + (o.flipX || o.flipY ? ", flipped" : "") + (o.hidden ? ", HIDDEN" : "") + (o.group ? ", in group " + o.group : "") + (o.clip ? ", is a clipping mask" : ""));
+    if (o.kind !== "image") return out.join("\n");
+    out.push("Crop " + n(o.cx) + ", " + n(o.cy) + ", " + n(o.cw) + " \u00d7 " + n(o.ch) + "; file " + o.file);
+    const f = project.base.doc.zip.file(o.file), added = project.pictures.get(o.file), bytes = added || (f ? await f.async("uint8array") : null);
+    out.push(bytes ? "File: " + render.kindOf(bytes) + ", " + (bytes.length / 1048576).toFixed(1) + " MB" + (project.base.doc.zip.file("previews/" + o.file + ".webp") ? "; Board's preview is in the file" : "; no preview in the file") : "File: NOT IN THE PROJECT");
+    const e = project.cache.seen.get(o.file);
+    if (!e) out.push("Not asked for yet");
+    else if (e.none) out.push("Given up on" + (e.fails ? " after " + e.fails + " failed decodes" : " (no file)"));
+    else if (!e.img) out.push("Still coming" + (e.fails ? " (" + e.fails + " failed so far)" : ""));
+    else out.push("Shown from " + (e.from || "?") + ": " + e.img.width + " \u00d7 " + e.img.height + (e.src ? " of " + e.src.w + " \u00d7 " + e.src.h : "") + (e.blank ? " \u2014 BLANK" : ""));
+    return out.join("\n");
 }
 function fitAll(glide) { if (canvasView) canvasView.fit(render.extent(project.scene), 0.06, glide); }
 // ---- objects picked on the canvas (or in a board): moved by dragging, sized by a corner, deleted ----
