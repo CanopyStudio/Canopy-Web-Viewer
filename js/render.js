@@ -85,9 +85,9 @@ function wantFont(family, weight, italic, redraw)
 // the preview Canopy Board saves in the file, else the copy kept on this phone, else made once from the original;
 // and the original itself (at most BIG across), only when it is looked at closely. So the big originals, slow to
 // decode, are decoded once, not again at each step of a zoom, and not at all on a phone that has seen them before.
-const BUDGET = 48e6, SMALL = 1024, BIG = 3072;
+const BUDGET = 48e6, SMALL = 1024, BIG = 2048;
 // What the pictures and drawing are costing, for the measuring readout (?measure on the address).
-export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0, previews: 0, kept: 0, made: 0 };
+export const stats = { draws: [], decoded: 0, decodeMs: [], dropped: 0, failed: 0, widest: 0, previews: 0, kept: 0, made: 0, missing: 0, gaps: 0, retried: 0 };
 export function cache() { return { seen: new Map(), busy: 0, queue: [], pixels: 0, frame: 0 }; }
 export function forget(c) { if (!c) return; for (const e of c.seen.values()) { if (e.img) e.img.close(); e.img = null; e.closed = true; } c.seen.clear(); c.pixels = 0; c.queue.length = 0; }
 export function pictures(doc, added, redraw, c)
@@ -101,7 +101,7 @@ export function pictures(doc, added, redraw, c)
             const job = c.queue.shift(), e = c.seen.get(job.file);
             if (!e || e.closed) continue;
             const bytes = bytesOf(job.file);
-            if (!bytes) { e.none = true; continue; }
+            if (!bytes) { e.none = true; stats.missing++; continue; }   // (not in the file at all)
             c.busy++;
             const t0 = performance.now();
             (job.side <= SMALL ? small(job.file, bytes) : bytes.then(b => decode(b, job.side))).then(got =>
@@ -113,7 +113,14 @@ export function pictures(doc, added, redraw, c)
                 stats.decoded++; stats.decodeMs.push(performance.now() - t0); if (stats.decodeMs.length > 30) stats.decodeMs.shift(); stats.widest = Math.max(stats.widest, got.img.width, got.img.height);
                 trim(c);
                 redraw();
-            }).catch(() => { e.none = true; stats.failed++; }).finally(() => { e.wanted = 0; c.busy--; next(); });
+            }).catch(() =>
+            {
+                // Couldn't be decoded (short of memory, say): tried again as it is drawn again, smaller if it was the
+                // original that failed; given up on only after a few tries.
+                e.fails = (e.fails || 0) + 1;
+                if (job.side > SMALL) e.noBig = true;
+                if (e.fails >= 4) { e.none = true; stats.failed++; } else stats.retried++;
+            }).finally(() => { e.wanted = 0; c.busy--; next(); });
         }
     };
     // "want": how many pixels across it is drawn (its longer side), or none for its own size.
@@ -122,8 +129,10 @@ export function pictures(doc, added, redraw, c)
         let e = c.seen.get(file);
         if (!e) { e = { img: null, k: 1, side: 0, wanted: 0, frame: 0 }; c.seen.set(file, e); }
         if (e.none) return null;
-        e.frame = c.frame;
-        const side = want ? (want * 1.25 <= SMALL ? SMALL : BIG) : 1e9;
+        e.frame = c.frame; e.at = performance.now();
+        // (the original only once it is shown well over the small one's size: a picture a little bigger than that
+        // looks the same from the small one, and the originals are what fill a phone's memory)
+        const side = want ? (want <= SMALL * 1.5 || e.noBig ? SMALL : BIG) : 1e9;
         if (side > e.side && !e.full && side > e.wanted) { e.wanted = side; c.queue.push({ file, side }); next(); }
         return e.img ? e : null;
     }
@@ -184,7 +193,10 @@ async function keep(file, img, src)
 function trim(c)
 {
     if (c.pixels <= BUDGET) return;
-    const old = [...c.seen.entries()].filter(([, e]) => e.img && e.frame < c.frame).sort((a, b) => a[1].frame - b[1].frame);
+    // (not drawn in the latest drawing, nor in the last few seconds: the canvas, a board open over it and the boards'
+    // pictures each draw, and what one of them shows is not to be let go because another just drew without it)
+    const now = performance.now();
+    const old = [...c.seen.entries()].filter(([, e]) => e.img && e.frame < c.frame && now - (e.at || 0) > 3000).sort((a, b) => a[1].at - b[1].at);
     for (const [file, e] of old)
     {
         if (c.pixels <= BUDGET * 0.8) break;
@@ -318,6 +330,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
 {
     opts = opts || {};
     if (get.begin) get.begin();
+    stats.gaps = 0;
     smooth = opts.fast ? "low" : "high";   // (moving: drawn quickly; still: drawn well)
     const doc = sc.doc;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -590,7 +603,7 @@ function drawOne(ctx, o, doc, s, get, redraw)
             const m = ctx.getTransform(), across = Math.max(b.w * Math.hypot(m.a, m.b), b.h * Math.hypot(m.c, m.d));
             const first = get(o.file, across), part = first && o.cw > 0 && o.ch > 0 ? Math.max(first.src.w / o.cw, first.src.h / o.ch) : 1;
             const got = part > 1.05 ? get(o.file, across * part) || first : first;   // (cropped: as big again as the part it shows)
-            if (!got) { ctx.fillStyle = "rgba(128,128,128,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h); return; }
+            if (!got) { stats.gaps++; ctx.fillStyle = "rgba(128,128,128,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h); return; }
             const img = got.img, k = got.k;
             flip(ctx, o, b);
             ctx.imageSmoothingQuality = smooth;
