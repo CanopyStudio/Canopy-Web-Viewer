@@ -6,6 +6,7 @@ import * as cnpy from "./cnpy.js";
 import * as dbx from "./dropbox.js";
 import * as render from "./render.js";
 import { Viewer, thumbnail } from "./viewer.js";
+import { boardIcons } from "./icons.js";
 
 const app = document.getElementById("app");
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -16,7 +17,7 @@ let folder = remembered("canopy.folder", "");
 let project = null;       // { path, name, local, base: { doc, rev }, steps, view, scene, get, pictures }
 let tab = remembered("canopy.tab", "lists");   // lists, boards or canvas
 let open = null;          // over the tab: { kind: "list" | "board", id }
-let arranging = false;    // a list's Edit mode: handles, delete and kinds
+let arranging = false;    // a list being put in order: each entry's handle shown
 let editing = null;       // the entry being typed in: { id } or, for a new one, { fresh: true, after, kind }; or { title: true }
 let problem = "";         // what went wrong, shown until the next one
 let canvasView = null, boardView = null;   // the viewers on show
@@ -49,28 +50,29 @@ function click(pitch, soft)
     }
     catch (e) { }
 }
-// A tiny buzz: vibration where the phone has it; on an iPhone, the buzz a switch gives as it is flipped.
-let buzzer = null;
-function buzz(ms)
+// A tiny buzz: vibration where the phone has it; on an iPhone (iOS 18 on), the buzz a switch gives as it is flipped,
+// which it only gives during a touch: so a buzz wanted between touches (a hold) waits for the finger's lift.
+let buzzLater = false;
+function buzz(ms, later)
 {
     try
     {
         if (navigator.vibrate) { navigator.vibrate(ms || 8); return; }
-        if (!buzzer)
-        {
-            buzzer = document.createElement("label");
-            buzzer.style.cssText = "position:fixed;left:-100px;top:0;opacity:0;pointer-events:none";
-            buzzer.innerHTML = '<input type="checkbox" switch>';
-            document.body.appendChild(buzzer);
-        }
-        buzzer.click();
+        if (later) { buzzLater = true; return; }
+        const label = document.createElement("label"), input = document.createElement("input");
+        label.ariaHidden = "true"; label.style.display = "none";
+        input.type = "checkbox"; input.setAttribute("switch", "");
+        label.appendChild(input); document.head.appendChild(label);
+        label.click();
+        label.remove();
     }
     catch (e) { }
 }
+document.addEventListener("pointerup", () => { if (buzzLater) { buzzLater = false; buzz(); } }, true);
 const feel = {
     tick() { click(1320); buzz(10); },
     untick() { click(760, true); buzz(6); },
-    hold() { click(980, true); buzz(12); },
+    hold() { click(980, true); buzz(12, true); },
     edge() { click(620, true); buzz(6); },     // a swipe past where it deletes (or back)
     gone() { click(420); buzz(14); },
     pick() { click(1100, true); buzz(6); },
@@ -80,31 +82,21 @@ const feel = {
 
 // ---- small pieces ----
 
+// The few Canopy Board has none of, drawn here as its are (lines 2.667 wide at 24, round ends).
 const icons = {
-    back: '<path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
-    folder: '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h9A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
-    file: '<rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 9h8M8 12.5h8M8 16h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
-    up: '<path d="M12 19V6M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-    more: '<circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/>',
+    back: '<path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.667" stroke-linecap="round" stroke-linejoin="round"/>',
     tick: '<path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
-    handle: '<path d="M6 9h12M6 15h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
-    remove: '<circle cx="12" cy="12" r="9" fill="currentColor"/><path d="M8 12h8" stroke="#1a1a1a" stroke-width="2.4" stroke-linecap="round"/>',
-    link: '<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-    plus: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
-    photo: '<rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="M4 17l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
-    lists: '<rect x="4" y="4" width="7" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="15" width="7" height="5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="12" width="7" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/>',
-    boards: '<rect x="3" y="6" width="11" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="10" y="11" width="11" height="8" rx="1.5" fill="currentColor" opacity=".35" stroke="currentColor" stroke-width="1.8"/>',
-    canvas: '<path d="M4 4h16v16H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 9h16M4 15h16M9 4v16M15 4v16" stroke="currentColor" stroke-width="1" opacity=".6"/>',
-    fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
-    lock: '<rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/>',
-    undo: '<path d="M9 7L4.5 11.5 9 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 11.5h9.5a5 5 0 0 1 0 10H12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-    redo: '<path d="M15 7l4.5 4.5L15 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 11.5H9.5a5 5 0 0 0 0 10H12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
-    forward: '<path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
-    pin: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3zM12 14v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
+    handle: '<path d="M6 9h12M6 15h12" stroke="currentColor" stroke-width="2.667" stroke-linecap="round"/>',
+    saved: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M8.2 12.3l2.6 2.6 5-5.3" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    saving: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4" opacity=".25"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+    waiting: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 7.5v5.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="16.4" r="1.2" fill="currentColor"/>',
+    chevron: '<path d="M10 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    forward: '<path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.667" stroke-linecap="round" stroke-linejoin="round"/>'
 };
+Object.assign(icons, boardIcons);   // (Canopy Board's own, where it has one)
 function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
 function text(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-function bar(title, left, right, cls) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + text(title) + "</h1>" + (right || "") + "</header>"; }
+function bar(title, left, right, cls, titleDoes) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + (titleDoes ? '<button data-do="' + titleDoes + '">' + text(title) + "</button>" : text(title)) + "</h1>" + (right || "") + "</header>"; }
 function fileName(path) { return path.split("/").pop().replace(/\.cnpy$/i, ""); }
 function iconButton(does, name, label, value, off) { return '<button class="icon" data-do="' + does + '"' + (value ? ' data-value="' + text(value) + '"' : "") + (off ? " disabled" : "") + ' aria-label="' + label + '" title="' + label + '">' + icon(name) + "</button>"; }
 // Undo and redo, for a bar.
@@ -139,13 +131,14 @@ async function showFiles()
     const pins = remembered("canopy.pinned", []);
     const recent = remembered("canopy.recent", []).filter(r => !pins.includes(r));
     const arrows = iconButton("back", "back", "Back", "", !back.length && folder === "") + iconButton("ahead", "forward", "Forward", "", !ahead.length);
-    app.innerHTML = bar("Canopy Web Viewer", "", arrows + iconButton("account", "more", "Account"), "files-bar")
+    const inFolder = r => r.split("/").slice(-2, -1)[0] || "Dropbox";
+    app.innerHTML = bar("Canopy Web Viewer", "", arrows + iconButton("account", "more", "Account"), "files-bar", "home")
         + '<main class="page enter">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
-        + (pins.length && folder === "" ? '<div class="section">Pinned</div><div class="rows">' + pins.map(r => item("file", fileName(r), r.split("/").slice(0, -1).join("/") || "Dropbox", "open", r)).join("") + "</div>" : "")
-        + (recent.length && folder === "" ? '<div class="section">Recent</div><div class="rows">' + recent.map(r => item("file", fileName(r), r.split("/").slice(0, -1).join("/") || "Dropbox", "open", r)).join("") + "</div>" : "")
-        + '<div class="section">' + (folder === "" ? "Dropbox" : text(folder.split("/").pop())) + '</div>'
-        + (folder !== "" ? '<div class="where">' + text(folder) + "</div>" : "")
+        + (pins.length && folder === "" ? '<h2 class="section">Pinned</h2><div class="rows">' + pins.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
+        + (recent.length && folder === "" ? '<h2 class="section">Recent</h2><div class="rows">' + recent.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
+        + '<h2 class="section">' + (folder === "" ? "Dropbox" : text(folder.split("/").pop())) + "</h2>"
+        + (folder !== "" ? '<div class="where">' + ["Dropbox"].concat(folder.split("/").filter(Boolean)).map(text).join(" / ") + "</div>" : "")
         + '<div class="rows" id="items"><div class="empty">Loading…</div></div>'
         + '<input class="hidden-input" type="file" id="picker"></main>';
     wire();
@@ -156,17 +149,27 @@ async function showFiles()
     if (!holder || project) return;
     holder.innerHTML = items.map(i => item(i.folder ? "folder" : "file", i.folder ? i.name : fileName(i.name), i.folder ? "" : when(i.modified), i.folder ? "into" : "open", i.path)).join("")
         + (items.length === 0 ? '<div class="empty">No folders or projects here</div>' : "")
-        + '<button class="item new" data-do="newproject">' + icon("plus") + '<span class="label"><div class="name">New project in this folder</div></span></button>';
+        + '<button class="item new" data-do="newproject">' + icon("plus", 18) + '<span class="name">New project here</span></button>';
     wire(holder);
 }
-function item(kind, name, sub, does, value)
+// A row as the desktop app's project lists have them: the name, a faded note at the right (when it was saved, or where it
+// is); a folder marked as one, and goes on into it; a project can be pinned.
+function item(kind, name, note, does, value)
 {
     const pinned = kind === "file" && remembered("canopy.pinned", []).includes(value);
-    return '<div class="item-row"><button class="item" data-do="' + does + '" data-value="' + text(value) + '">' + icon(kind) + '<span class="label"><div class="name">' + text(name) + "</div>"
-        + (sub ? '<div class="sub">' + text(sub) + "</div>" : "") + "</span></button>"
-        + (kind === "file" ? '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to the top") + '">' + icon("pin", 18) + "</button>" : "") + "</div>";
+    return '<div class="item-row"><button class="item' + (kind === "folder" ? " folder" : "") + '" data-do="' + does + '" data-value="' + text(value) + '">'
+        + (kind === "folder" ? icon("folder", 18) : "") + '<span class="name">' + text(name) + "</span>"
+        + (note ? '<span class="note">' + text(note) + "</span>" : "") + (kind === "folder" ? icon("chevron", 16) : "") + "</button>"
+        + (kind === "file" ? '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to the top") + '" title="' + (pinned ? "Unpin" : "Pin to the top") + '">' + icon("pin", 16) + "</button>" : "") + "</div>";
 }
-function when(iso) { if (!iso) return ""; const d = new Date(iso); return "Saved " + d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
+// When it was saved, briefly: the time today, the day this year, else the day and year.
+function when(iso)
+{
+    if (!iso) return "";
+    const d = new Date(iso), now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return d.toLocaleDateString(undefined, d.getFullYear() === now.getFullYear() ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+}
 function localOpener()
 {
     return '<div class="local"><button class="quiet-button" data-do="pick">Open a project from this phone</button><span>Changes to a project opened this way stay on this phone until you save a copy.</span>'
@@ -493,8 +496,11 @@ function shrink(done)
     const card = open && app.querySelector('[data-do="' + open.kind + '"][data-value="' + CSS.escape(open.id) + '"]');
     if (calm || !over) return done();
     const from = over.getBoundingClientRect(), to = card ? card.getBoundingClientRect() : null;
-    const a = to ? over.animate([{ transformOrigin: "0 0", transform: "none", opacity: 1 }, { transformOrigin: "0 0", transform: "translate(" + (to.left - from.left) + "px," + (to.top - from.top) + "px) scale(" + to.width / from.width + "," + to.height / from.height + ")", opacity: 0.4, borderRadius: "14px" }], { duration: 240, easing: "cubic-bezier(.4,0,.6,1)" })
-                 : over.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(24px)" }], { duration: 200, easing: "ease-in" });
+    // (quick out, slowing as it lands on its card; what's on it gone at once, so nothing is seen squashed)
+    const inside = over.querySelector(".sheet, .stage, .bar");
+    if (inside && to) over.querySelectorAll(".sheet, .stage, .bar").forEach(el => el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 90, fill: "forwards" }));
+    const a = to ? over.animate([{ transformOrigin: "0 0", transform: "none", borderRadius: getComputedStyle(over).borderRadius }, { transformOrigin: "0 0", transform: "translate(" + (to.left - from.left) + "px," + (to.top - from.top) + "px) scale(" + to.width / from.width + "," + to.height / from.height + ")", borderRadius: "40px" }], { duration: 230, easing: "cubic-bezier(.16,1,.3,1)", fill: "forwards" })
+                 : over.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(24px)" }], { duration: 160, easing: "cubic-bezier(.16,1,.3,1)", fill: "forwards" });
     a.onfinish = done;
 }
 function openList(id, card)
@@ -534,13 +540,13 @@ function showList(over)
     const keepScroll = wrap ? wrap.querySelector(".sheet").scrollTop : 0;
     over.innerHTML = '<div class="sheet-wrap" style="background:' + c.card + ";color:" + c.onCard + '">'
         + '<div class="band" style="background:' + c.stripe + '"></div>'
-        + bar("", iconButton("close", "back", "Back"), statusHtml() + undoButtons() + (locked ? "" : '<button class="word' + (arranging ? " on" : "") + '" data-do="arrange">' + (arranging ? "Done" : "Edit") + "</button>" + iconButton("listmenu", "more", "List options")), "on-card")
+        + bar("", iconButton("close", "back", "Back"), statusHtml() + undoButtons() + (locked ? "" : '<button class="word' + (arranging ? " on" : "") + '" data-do="arrange">' + (arranging ? "Done" : "Reorder") + "</button>" + iconButton("listmenu", "more", "List options")), "on-card")
         + '<main class="sheet"><div class="fade-in">'
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
         + (editing && editing.title ? '<input class="title-edit" value="' + text(l.name) + '" enterkeyhint="done">' : '<h2 class="title" data-do="retitle">' + (text(l.name) || '<span class="faint">Untitled list</span>') + "</h2>")
         + '<div class="entries" id="entries">' + html + "</div>"
-        + (locked ? "" : '<div class="adders"><button class="adder" data-do="add" data-value="T">+ Add task</button>'
-            + (arranging ? '<button class="adder" data-do="add" data-value="H">+ Heading</button><button class="adder" data-do="add" data-value="D">+ Divider</button>' : "") + "</div>")
+        + (locked || arranging ? "" : '<div class="adders"><button class="adder" data-do="add" data-value="T">' + icon("plus", 18) + "Add task</button>"
+            + '<button class="adder small" data-do="add" data-value="H">Heading</button><button class="adder small" data-do="add" data-value="D">Divider</button></div>')
         + (hidden ? '<button class="note-line" data-do="showdone">' + (showDone ? "Hide completed" : "Show " + hidden + " completed") + "</button>" : "")
         + "</div></main></div>";
     over.querySelector(".sheet").scrollTop = keepScroll;
@@ -559,7 +565,6 @@ function entry(r, c)
     const tile = r.kind === "T" || r.kind === "N" ? "background:" + c.tile + ";color:" + c.ink : "";
     const isEditing = editing && !editing.fresh && editing.id === r.id;
     let inner = "";
-    if (arranging) inner += '<button class="remove" data-do="remove" data-value="' + r.id + '" aria-label="Delete">' + icon("remove", 20) + "</button>";
     if (r.kind === "D") inner += '<div class="line" style="background:' + render.shade(c.tile, 0.14) + '"></div>';
     else
     {
@@ -572,11 +577,7 @@ function entry(r, c)
                            : '<div class="words" data-do="type" data-value="' + r.id + '">' + cnpy.rich(r.text) + "</div>";
         if (r.link && !arranging && !isEditing) inner += '<button class="link" data-do="follow" data-value="' + text(r.link) + '" aria-label="Go to what it links to">' + icon("link", 18) + "</button>";
     }
-    if (arranging)
-    {
-        inner += '<select class="kind" data-id="' + r.id + '" style="color:inherit">' + [["T", "Task"], ["N", "Note"], ["H", "Heading"], ["D", "Divider"]].map(k => '<option value="' + k[0] + '"' + (k[0] === r.kind ? " selected" : "") + ">" + k[1] + "</option>").join("") + "</select>";
-        inner += '<span class="handle" data-id="' + r.id + '" aria-label="Move">' + icon("handle") + "</span>";
-    }
+    if (arranging) inner += '<span class="handle" data-id="' + r.id + '" aria-label="Move">' + icon("handle") + "</span>";
     return '<div class="entry ' + r.kind + (r.done ? " done" : "") + (isEditing ? " editing" : "") + '" data-id="' + r.id + '" style="' + tile + '">' + inner + "</div>";
 }
 function draft(c)   // a new entry being typed, not in the list until it has words
@@ -615,12 +616,16 @@ let saving = false, saveTimer = null, state = "saved", stateWhy = "";
 function statusHtml()
 {
     if (!project) return "";
-    if (project.local) return '<button class="status" data-do="copy">Save a copy</button>';
-    const words = { saved: "Saved", saving: "Saving…", waiting: "Not saved yet", updated: "Updated" }[state] || "";
-    return '<button class="status' + (state === "waiting" ? " warn" : "") + '" data-do="refresh" title="' + text(stateWhy || "Check for changes") + '">' + words + "</button>";   // (tapped: saved now, and checked for changes)
+    if (project.local) return '<button class="icon status" data-do="copy" aria-label="Save a copy" title="Save a copy">' + icon("download") + "</button>";
+    // A round mark: a tick once saved (lit as a save lands), turning while saving, a warning while it can't be.
+    const words = { saved: "Saved", saving: "Saving", waiting: "Not saved yet" + (stateWhy ? ": " + stateWhy : ""), updated: "Updated from Dropbox" }[state] || "";
+    const mark = state === "saving" ? "saving" : state === "waiting" ? "waiting" : "saved";
+    return '<button class="icon status ' + state + (landed ? " landed" : "") + '" data-do="refresh" aria-label="' + text(words) + '" title="' + text(words) + '">' + icon(mark) + "</button>";   // (tapped: saved now, and checked for changes)
 }
+let landed = false;   // a save just landed: the tick lit for a moment
 function setState(s, why)
 {
+    landed = state === "saving" && (s === "saved" || s === "updated");
     state = s; stateWhy = why || "";
     app.querySelectorAll(".status").forEach(at => { at.outerHTML = statusHtml(); });
     app.querySelectorAll(".status").forEach(at => at.addEventListener("click", () => act(at.dataset.do)));
@@ -671,11 +676,11 @@ function undoRedo(redo)
     show();
     if (picked) tools(picked.viewer);
 }
+function undoable() { app.querySelectorAll('[data-do="undo"]').forEach(b => { b.disabled = !undos.length; }); app.querySelectorAll('[data-do="redo"]').forEach(b => { b.disabled = !redos.length; }); }
 function changed()
 {
     keepSteps();
-    app.querySelectorAll('[data-do="undo"]').forEach(b => { b.disabled = !undos.length; });
-    app.querySelectorAll('[data-do="redo"]').forEach(b => { b.disabled = !redos.length; });
+    undoable();
     redrawViewers();
     if (project.local) return;
     setState("saving");
@@ -1088,7 +1093,7 @@ function sheetUp(build, chose)
     {
         if (closing) return;
         closing = true;
-        const done = () => { sheet.remove(); (then || show)(); };
+        const done = () => { sheet.remove(); if (then) then(); else if (current() && app.querySelector("#over #entries")) { redrawEntries(); undoable(); } else show(); };
         if (calm) return done();
         sheet.querySelector(".shade").animate([{ opacity: 1 }, { opacity: 0 }], { duration: 170 });
         panel.animate([{ transform: "none" }, { transform: "translateY(100%)" }], { duration: 180, easing: "ease-in" }).onfinish = done;
@@ -1260,7 +1265,7 @@ function accountMenu()
 function wire(root)
 {
     (root || app).querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", ev => act(b.dataset.do, b.dataset.value, ev, b)));
-    if (root && !root.querySelector("textarea, input.title-edit, select.kind, .handle, #entries, #picker")) return;
+    if (root && !root.querySelector("textarea, input.title-edit, .handle, #entries, #picker")) return;
     const scope = root || app;
     const picker = scope.querySelector("#picker");
     if (picker) picker.addEventListener("change", () => { if (picker.files[0]) openLocal(picker.files[0]); });
@@ -1277,13 +1282,6 @@ function wire(root)
             setTimeout(() => { if (draws === drawn && !sheetOpen()) show(); }, 350);   // (nothing else drew the page: drawn now, the words in place)
         });
     }
-    scope.querySelectorAll("select.kind").forEach(s => s.addEventListener("change", () =>
-    {
-        const fields = { kind: s.value };
-        if (s.value !== "T") fields.done = false;
-        step({ t: "set", id: s.dataset.id, fields });   // (a divider keeps its words and link, unseen)
-        show();
-    }));
     scope.querySelectorAll(".handle").forEach(h => h.addEventListener("pointerdown", e => { e.preventDefault(); drag(h, e); }));
     if (scope.querySelector("#entries")) touchEntries(scope);
 }
@@ -1294,6 +1292,7 @@ function act(what, value, ev, el)
     {
         case "signin": dbx.signIn(); break;
         case "account": accountMenu(); break;
+        case "home": if (folder !== "") { back.push(folder); ahead = []; folder = ""; remember("canopy.folder", folder); } window.scrollTo(0, 0); showFiles(); break;
         case "back":
             if (back.length) { ahead.push(folder); folder = back.pop(); }
             else if (folder !== "") { ahead.push(folder); folder = folder.split("/").slice(0, -1).join("/"); }   // (opened here: back is up a folder)
@@ -1355,14 +1354,6 @@ function act(what, value, ev, el)
             if (value === "D") { step({ t: "add", row: { id: cnpy.newId(), kind: "D", done: false, color: null, text: "", link: null }, after: last }); show(); break; }
             editing = { fresh: true, after: last, kind: value };
             show();
-            break;
-        }
-        case "remove":
-        {
-            const row = app.querySelector('.entry[data-id="' + CSS.escape(value) + '"]');
-            const gone = () => { step({ t: "del", id: value }); show(); };
-            if (row && !calm) row.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(-24px) scale(.96)" }], { duration: 160, easing: "ease-in" }).onfinish = gone;
-            else gone();
             break;
         }
         case "showdone": step({ t: "listset", fields: { showDone: !current().showDone } }); show(); break;
