@@ -668,11 +668,14 @@ function drawOne(ctx, o, doc, s, get, redraw)
             const first = get(o.file, across), part = first && o.cw > 0 && o.ch > 0 ? Math.max(first.src.w / o.cw, first.src.h / o.ch) : 1;
             const got = part > 1.05 ? get(o.file, across * part) || first : first;   // (cropped: as big again as the part it shows)
             if (!got) { stats.gaps++; ctx.fillStyle = "rgba(128,128,128,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h); return; }
-            const img = got.img, k = got.k;
+            const img = got.img, kx = got.src ? img.width / got.src.w : got.k, ky = got.src ? img.height / got.src.h : got.k;
             flip(ctx, o, b);
             ctx.imageSmoothingQuality = smooth;
-            const cw = o.cw > 0 ? o.cw * k : img.width, ch = o.ch > 0 ? o.ch * k : img.height;
-            ctx.drawImage(img, o.cx * k, o.cy * k, cw, ch, b.x, b.y, b.w, b.h);
+            // The crop on the copy, kept inside it: Safari draws nothing at all for a part reaching past the picture's
+            // edge, which a copy rounded to whole pixels can by a fraction of one.
+            const sx = Math.max(0, o.cx * kx), sy = Math.max(0, o.cy * ky);
+            const sw = Math.min((o.cw > 0 ? o.cw * kx : img.width), img.width - sx), sh = Math.min((o.ch > 0 ? o.ch * ky : img.height), img.height - sy);
+            if (sw > 0 && sh > 0) ctx.drawImage(img, sx, sy, sw, sh, b.x, b.y, b.w, b.h);
             return;
         }
         case "paint":
