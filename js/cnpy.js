@@ -45,7 +45,7 @@ function readMeta(rest)
     const style = m[9] || "rr";
     return {
         id: m[0], group: m[1] === "-" ? null : m[1], groupName: unescape(m[3] || ""), author: unescape(m[4] || ""),
-        hidden: (m[5] || "").includes("H"), flipX: (m[5] || "").includes("X"), flipY: (m[5] || "").includes("Y"), clip: (m[5] || "").includes("M"),
+        hidden: (m[5] || "").includes("H"), locked: (m[5] || "").includes("L"), flipX: (m[5] || "").includes("X"), flipY: (m[5] || "").includes("Y"), clip: (m[5] || "").includes("M"),
         opacity: m.length > 6 ? num(m[6]) : 1, blend: m[7] || "normal", angle: num(m[8]), shear: num(m[10]),
         cap: "brs".indexOf(style[0]), join: "mrb".indexOf(style[1]),
         dash: (style.slice(2).split(/[@^~]/)[0] || null), arrowhead: style.includes("^"),
@@ -113,7 +113,7 @@ export function parse(text)
 {
     const lines = text.split("\n");
     const items = [], lists = [], boards = [];
-    const doc = { lines, items, lists, boards, palette: [], folders: new Set(), hides: new Set(), fades: new Map(), canvas: "#161717", boardColor: null, boardLook: 0, version: ROWS_SINCE };
+    const doc = { lines, items, lists, boards, palette: [], empties: [], boardsLine: -1, lastBoardLine: -1, folders: new Set(), hides: new Set(), locks: new Set(), fades: new Map(), canvas: "#161717", boardColor: null, boardLook: 0, version: ROWS_SINCE };
     let meta = null, metaAt = -1, list = null, last = null;
     for (let i = 0; i < lines.length; i++)
     {
@@ -132,14 +132,17 @@ export function parse(text)
         if (key === "CanopyBoard" || key === "CanopyCreator") { const v = parseInt(rest, 10); if (v > doc.version) doc.version = v; }
         else if (key === "canvas") doc.canvas = rest.trim();
         else if (key === "palette") doc.palette = rest.split(" ").filter(c => /^#[0-9A-Fa-f]{6,8}$/.test(c));
-        else if (key === "boards") { const f = rest.split(" "); doc.boardColor = col(f[0]); doc.boardLook = parseInt(f[1], 10) || 0; }
+        else if (key === "boards") { doc.boardsLine = i; const f = rest.split(" "); doc.boardColor = col(f[0]); doc.boardLook = parseInt(f[1], 10) || 0; }
         else if (key === "folders") rest.split(" ").filter(Boolean).forEach(x => doc.folders.add(x));
         else if (key === "hides") rest.split(" ").filter(Boolean).forEach(x => doc.hides.add(x));
+        else if (key === "locks") { doc.locksLine = i; rest.split(" ").filter(Boolean).forEach(x => doc.locks.add(x)); }
+        else if (key === "empty") { const f = rest.split(" "); if (f.length >= 2) doc.empties.push({ id: f[0], name: f.slice(2).join(" ") || "Layer" }); }
         else if (key === "fades") rest.split(" ").filter(Boolean).forEach(x => { const kv = x.split("="); if (kv.length === 2) doc.fades.set(kv[0], num(kv[1])); });
         else if (key === "board")
         {
             const f = rest.split("|");
             boards.push({ id: f[0], x: num(f[1]), y: num(f[2]), w: num(f[3]), h: num(f[4]), name: unescape(f[5] || "Board") });
+            doc.lastBoardLine = i;
         }
         else if (key === "meta") { meta = readMeta(rest); metaAt = i; continue; }
         else
@@ -164,49 +167,127 @@ export function parse(text)
 // The layer an object is in (its outermost group, when that is one), with its name.
 export function layerOf(doc, o) { if (!o.group) return null; const id = o.group.split("/")[0]; return doc.folders.has(id) ? { id, name: o.groupName.split(SEP)[0] } : null; }
 
-// The layer new things go into: the one the topmost object is in.
+// The layer new things go into: the one the topmost object is in (or, with none in any, the first empty one).
 export function topLayer(doc)
 {
     for (let i = doc.items.length - 1; i >= 0; i--) { const l = layerOf(doc, doc.items[i]); if (l) return l; }
-    return null;
+    return doc.empties.length ? { id: doc.empties[0].id, name: doc.empties[0].name } : null;
+}
+// Whether an object can't be moved: locked itself, or in a locked group or layer ("view": as the steps leave them).
+export function locked(doc, o, view)
+{
+    const own = view && view.locks.has(o.id) ? view.locks.get(o.id) : !!o.locked;
+    return own || lockers(doc, o, view).length > 0;
+}
+// The groups and layers it is in that are locked themselves.
+export function lockers(doc, o, view) { return !o.group || doc.locks.size === 0 ? [] : o.group.split("/").filter(id => doc.locks.has(id) && !(view && view.unlocked.has(id))); }
+
+// ---- moving and sizing: p' = p * k + (ox, oy), as a step leaves an object ----
+
+// An object moved so (a copy, for drawing).
+export function placed(o, t)
+{
+    const q = { ...o }, X = v => v * t.k + t.ox, Y = v => v * t.k + t.oy;
+    delete q._path; delete q._layout;
+    if (o.kind === "line" || o.kind === "arrow") { q.ax = X(o.ax); q.ay = Y(o.ay); q.bx = X(o.bx); q.by = Y(o.by); }
+    q.x = X(o.x); q.y = Y(o.y); q.w = o.w * t.k; q.h = o.h * t.k;
+    if (o.kind === "list") q.scale = (o.scale || 1) * t.k;
+    if (o.kind === "type") { q.size = o.size * t.k; if (o.leading > 0) q.leading = o.leading * t.k; }
+    return q;
+}
+// Its body line, moved so (only the numbers that place it changed).
+function placedLine(line, o, t)
+{
+    const sp = line.indexOf(" "), key = line.substring(0, sp), f = line.substring(sp + 1).split("|");
+    const X = v => n(num(v) * t.k + t.ox), Y = v => n(num(v) * t.k + t.oy), K = v => n(num(v) * t.k);
+    const at = key === "image" || key === "item" || key === "paint" || key === "shape" ? 1 : 0;
+    f[at] = X(f[at]); f[at + 1] = Y(f[at + 1]);
+    if (key === "shape" && (f[0] === "L" || f[0] === "A")) { f[3] = X(f[3]); f[4] = Y(f[4]); }
+    else { f[at + 2] = K(f[at + 2]); if (key !== "list") f[at + 3] = K(f[at + 3]); }
+    if (key === "list") f[3] = K(f[3] || 1);
+    if (key === "type") { f[4] = K(f[4]); if (num(f[5]) > 0) f[5] = K(f[5]); }
+    return key + " " + f.join("|");
+}
+export function compose(t, s)   // t then s
+{
+    return { k: t.k * s.k, ox: t.ox * s.k + s.ox, oy: t.oy * s.k + s.oy };
 }
 
 // ---- writing ----
 
-function metaLine(id, layer, author) { return "meta " + id + "|" + (layer ? layer.id : "-") + "|0|" + (layer ? escape(layer.name) : "") + "|" + escape(author || "") + "||1|normal|0|rr"; }
+function metaLine(id, layer, author, lock) { return "meta " + id + "|" + (layer ? layer.id : "-") + "|0|" + (layer ? escape(layer.name) : "") + "|" + escape(author || "") + "|" + (lock ? "L" : "") + "|1|normal|0|rr"; }
 const n = v => String(Math.round(v * 1000) / 1000);
 
-// The project's text with the lists' entries and names as "view" has them, and what was added after the rest.
+// The project's text as "view" has it: the lists' entries, names and colours; objects moved, sized or deleted; boards
+// added (after the others); and lists and photos added (after everything, on top).
 export function write(doc, view)
 {
     const lines = doc.lines.slice();
     const byId = new Map(view.lists.map(l => [l.id, l]));
-    for (const was of doc.lists.slice().sort((a, b) => b.start - a.start))   // from the end, so earlier places stay put
+    const cuts = [];   // lines taken out or put in: { from, to, put }, done last, from the end, so earlier places stay put
+    for (const o of doc.items)
     {
-        if (view.deleted.has(was.id)) { const from = was.metaLine >= 0 ? was.metaLine : was.line; lines.splice(from, was.end - from); continue; }   // (its lines, all of them)
-        const now = byId.get(was.id);
-        if (!now) continue;
-        lines.splice(was.start, was.end - was.start, ...now.rows.map(rowLine));
-        if (now.name !== was.name || now.ink !== was.ink || now.fill !== was.fill || now.showDone !== was.showDone)
+        if (view.removed.has(o.id) || view.deleted.has(o.id)) { cuts.push({ from: o.metaLine >= 0 ? o.metaLine : o.line, to: o.kind === "list" ? o.end : o.lastLine + 1, put: [] }); continue; }   // (its lines, all of them)
+        if (view.locks.has(o.id) && o.metaLine >= 0 && view.locks.get(o.id) !== !!o.locked)
         {
-            // Its own line, only its name, colours or showing what's done changed.
-            const f = lines[was.line].substring(5).split("|");
+            // Locked or unlocked here: its flags, "L" put in or taken out.
+            const m = lines[o.metaLine].substring(5).split("|");
+            while (m.length < 6) m.push("");
+            m[5] = view.locks.get(o.id) ? m[5] + "L" : m[5].replace(/L/g, "");
+            lines[o.metaLine] = "meta " + m.join("|");
+        }
+        if (o.kind !== "list") { const t = view.moved.get(o.id); if (t) lines[o.line] = placedLine(lines[o.line], o, t); continue; }
+        const now = byId.get(o.id);
+        if (!now) continue;
+        cuts.push({ from: o.start, to: o.end, put: now.rows.map(rowLine) });
+        if (now.name !== o.name || now.ink !== o.ink || now.fill !== o.fill || now.showDone !== o.showDone || now.x !== o.x || now.y !== o.y || now.w !== o.w || now.scale !== o.scale)
+        {
+            // Its own line: its place, size, name, colours and showing what's done as they are now.
+            const f = lines[o.line].substring(5).split("|");
             while (f.length < 7) f.push("");
+            f[0] = n(now.x); f[1] = n(now.y); f[2] = n(now.w); f[3] = n(now.scale || 1);
             f[4] = now.ink || "-"; f[5] = now.showDone ? "1" : "0"; f[6] = escape(now.name);
             if (now.fill) f[7] = now.fill; else f.length = 7;
-            lines[was.line] = "list " + f.join("|");
+            lines[o.line] = "list " + f.join("|");
         }
     }
+    if (view.unlocked.size && doc.locksLine >= 0)
+    {
+        // Groups and layers unlocked here: out of the "locks" line (the line gone when none are left).
+        const left = [...doc.locks].filter(id => !view.unlocked.has(id));
+        lines[doc.locksLine] = left.length ? "locks " + left.sort().join(" ") : "";
+        if (!left.length) cuts.push({ from: doc.locksLine, to: doc.locksLine + 1, put: [] });
+    }
+    if (view.boards.length)
+    {
+        const at = doc.lastBoardLine >= 0 ? doc.lastBoardLine + 1 : doc.boardsLine >= 0 ? doc.boardsLine + 1 : 1;
+        cuts.push({ from: at, to: at, put: view.boards.map(b => "board " + b.id + "|" + [n(b.x), n(b.y), n(b.w), n(b.h), escape(b.name)].join("|")) });
+    }
+    cuts.sort((a, b) => (b.from - a.from) || (b.to - a.to));
+    for (const c of cuts) lines.splice(c.from, c.to - c.from, ...c.put);
     // Added here: new lists and photos, on top of everything (the end of the file).
     let tail = lines.length;
     while (tail > 0 && lines[tail - 1].trim() === "") tail--;
     const added = [];
     for (const l of view.lists.filter(o => o.fresh))
-        added.push(metaLine(l.id, l.layer, l.author), "list " + [n(l.x), n(l.y), n(l.w), 1, l.ink || "#DAFF00", l.showDone ? 1 : 0, escape(l.name)].concat(l.fill ? [l.fill] : []).join("|"), ...l.rows.map(rowLine));
+        added.push(metaLine(l.id, l.layer, l.author, l.locked), "list " + [n(l.x), n(l.y), n(l.w), n(l.scale || 1), l.ink || "#DAFF00", l.showDone ? 1 : 0, escape(l.name)].concat(l.fill ? [l.fill] : []).join("|"), ...l.rows.map(rowLine));
     for (const p of view.photos)
-        added.push(metaLine(p.id, p.layer, p.author), "image " + [p.file, n(p.x), n(p.y), n(p.w), n(p.h), 0, 0, p.pw, p.ph, escape(p.name)].join("|"));
+        added.push(metaLine(p.id, p.layer, p.author, p.locked), "image " + [p.file, n(p.x), n(p.y), n(p.w), n(p.h), 0, 0, p.pw, p.ph, escape(p.name)].join("|"));
     lines.splice(tail, 0, ...added);
     return lines.join("\n");
+}
+
+// A new, empty project, as the desktop app starts one: its colours, grid and one empty layer to put things in.
+export function blank()
+{
+    const layer = newId();
+    return ["CanopyBoard 7", "blend #EF5EB8 #DAFF00 50", "palette", "count 6", "canvas #161717", "grid 64 4", "boards - 0", "folders " + layer, "empty " + layer + " - Layer 1", ""].join("\n");
+}
+export async function blankFile()
+{
+    const zip = new JSZip();
+    zip.file("layers.txt", blank(), { compression: "DEFLATE" });
+    return await zip.generateAsync({ type: "uint8array" });
 }
 
 // The project file opened: its zip and its layers.txt read.
@@ -228,7 +309,7 @@ export async function open(bytes)
 export async function save(doc, view, pictures)
 {
     const text = write(doc, view);
-    doc.zip.file("layers.txt", (doc.bom ? "﻿" : "") + text, { compression: "DEFLATE" });
+    doc.zip.file("layers.txt", (doc.bom ? "\uFEFF" : "") + text, { compression: "DEFLATE" });
     for (const p of view.photos) if (!doc.zip.file(p.file) && pictures.has(p.file)) doc.zip.file(p.file, pictures.get(p.file), { compression: "STORE" });
     return await doc.zip.generateAsync({ type: "uint8array" });
 }
@@ -240,12 +321,33 @@ export async function save(doc, view, pictures)
 export function apply(doc, steps)
 {
     const lists = doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) }));
-    const photos = [], deleted = new Set();
+    const photos = [], deleted = new Set(), removed = new Set(), moved = new Map(), boards = [], locks = new Map(), unlocked = new Set();
+    const items = new Map(doc.items.map(o => [o.id, o]));
     const ids = new Set(doc.items.map(o => o.id));   // (already in the file: a save that went through, its answer lost)
     // Where an entry goes: after the one named, at the top for none (null), at the end if that one has gone.
     const place = (rows, after) => { if (after === null) return 0; const k = rows.findIndex(r => r.id === after); return k < 0 ? rows.length : k + 1; };
     for (const s of steps)
     {
+        if (s.t === "place" || s.t === "delobj")
+        {
+            // Objects moved and sized (a shift, then a scale about a point), or deleted: whichever kind, wherever made.
+            for (const id of s.ids)
+            {
+                const l = lists.find(o => o.id === id), p = photos.find(o => o.id === id);
+                if (s.t === "delobj") { if (l) { lists.splice(lists.indexOf(l), 1); if (!l.fresh) deleted.add(id); } else if (p) photos.splice(photos.indexOf(p), 1); else if (items.has(id)) removed.add(id); continue; }
+                if (l) Object.assign(l, placed(l, s.by));
+                else if (p) { const q = placed({ ...p, kind: "image" }, s.by); Object.assign(p, { x: q.x, y: q.y, w: q.w, h: q.h }); }
+                else if (items.has(id)) moved.set(id, moved.has(id) ? compose(moved.get(id), s.by) : s.by);
+            }
+            continue;
+        }
+        if (s.t === "lock")
+        {
+            for (const id of s.ids) { const l = lists.find(o => o.id === id && o.fresh), p = photos.find(o => o.id === id); if (l) l.locked = s.on; else if (p) p.locked = s.on; else locks.set(id, s.on); }
+            for (const g of s.groups || []) unlocked.add(g);
+            continue;
+        }
+        if (s.t === "newboard") { if (!doc.boards.some(b => b.id === s.board.id)) boards.push({ ...s.board }); continue; }
         if (s.t === "newlist") { if (!ids.has(s.list)) lists.push({ id: s.list, kind: "list", fresh: true, x: s.x, y: s.y, w: 340, scale: 1, ink: "#DAFF00", fill: null, showDone: true, name: s.name, rows: [], layer: s.layer, author: s.author, group: s.layer ? s.layer.id : null, groupName: s.layer ? s.layer.name : "" }); continue; }
         if (s.t === "photo") { if (!ids.has(s.id)) photos.push({ ...s.photo, id: s.id }); continue; }
         const l = lists.find(o => o.id === s.list);
@@ -259,7 +361,7 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked };
 }
 
 // An entry's words with the marks the desktop app reads (**bold**, *italic*) as safe HTML.

@@ -2,6 +2,8 @@
 // type and lists, each turned, slanted, faded, blended and clipped as it is there. Close, not exact: type lays out
 // with the browser's own shaping, and blurs and a path's dynamic corners are left out.
 
+import { placed } from "./cnpy.js";
+
 const T = 256;   // a drawing's tiles, in pixels
 
 // ---- colours ----
@@ -106,14 +108,16 @@ function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row)
 export function scene(doc, view)
 {
     const lists = new Map(view.lists.map(l => [l.id, l]));
-    const items = doc.items.filter(o => !(view.deleted && view.deleted.has(o.id))).map(o => o.kind === "list" && lists.has(o.id) ? lists.get(o.id) : o);
+    const items = doc.items.filter(o => !view.deleted.has(o.id) && !view.removed.has(o.id))
+        .map(o => o.kind === "list" && lists.has(o.id) ? lists.get(o.id) : view.moved.has(o.id) ? placed(o, view.moved.get(o.id)) : o)
+        .map(o => view.locks.has(o.id) ? { ...o, locked: view.locks.get(o.id) } : o);
     for (const l of view.lists) if (l.fresh) items.push(l);
-    for (const p of view.photos) items.push({ kind: "image", id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
+    for (const p of view.photos) items.push({ kind: "image", locked: !!p.locked, id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
     const masks = new Map();   // a clipped group's path → its mask (the topmost of it, marked as one)
     const top = new Map();
     for (const o of items) if (o.group) { const ids = o.group.split("/"); for (let k = 1; k <= ids.length; k++) top.set(ids.slice(0, k).join("/"), o); }
     for (const [g, o] of top) if (o.clip && o.group === g) masks.set(g, o);
-    return { doc, items, masks, boards: doc.boards };
+    return { doc, items, masks, boards: doc.boards.concat(view.boards) };
 }
 
 function hidden(doc, o)
@@ -130,7 +134,7 @@ export function box(o, ctx)
     if (o.kind === "list") return { x: o.x, y: o.y, w: o.w, h: listLayout(o, ctx).h * o.scale };
     return { x: o.x, y: o.y, w: o.w, h: o.h };
 }
-function outer(o, ctx)
+export function outer(o, ctx)
 {
     const b = box(o, ctx);
     if (!o.angle && !o.shear) return b;
@@ -498,6 +502,28 @@ function drawList(ctx, o)
         });
         ctx.restore();
     }
+}
+
+// The object at a point on the canvas (topmost first, as drawn; hidden ones passed over), or null. "slack": how near
+// counts, in canvas units (a finger is not a pointer).
+export function objectAt(sc, x, y, slack)
+{
+    for (let i = sc.items.length - 1; i >= 0; i--)
+    {
+        const o = sc.items[i];
+        if (hidden(sc.doc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
+        if (o.kind === "line" || o.kind === "arrow")
+        {
+            const dx = o.bx - o.ax, dy = o.by - o.ay, len = dx * dx + dy * dy, t = len ? Math.max(0, Math.min(1, ((x - o.ax) * dx + (y - o.ay) * dy) / len)) : 0;
+            if (Math.hypot(x - o.ax - dx * t, y - o.ay - dy * t) <= slack + (o.width || 0)) return o;
+            continue;
+        }
+        const b = box(o);
+        let p = { x, y };
+        if (o.angle || o.shear) { const q = placing(o, b).inverse().transformPoint(new DOMPoint(x, y)); p = { x: q.x, y: q.y }; }
+        if (p.x >= b.x - slack && p.x <= b.x + b.w + slack && p.y >= b.y - slack && p.y <= b.y + b.h + slack) return o;
+    }
+    return null;
 }
 
 // The list (if any) at a point on the canvas, topmost first.

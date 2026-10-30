@@ -57,7 +57,13 @@ svg { display: block; }
 .where { margin: 2px 4px 10px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .rows { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 14px; text-align: left; }
-.item + .item { border-top: 1px solid var(--border); }
+.item-row { display: flex; align-items: center; }
+.item-row + .item-row, .item-row + .item, .item + .item-row, .item + .item { border-top: 1px solid var(--border); }
+.item-row .item { flex: 1; min-width: 0; }
+.pin { flex: none; width: 48px; align-self: stretch; display: grid; place-items: center; color: var(--muted); opacity: .45; }
+.pin.on { color: var(--heading); opacity: 1; }
+.item.new { color: var(--heading); }
+.item.new svg { color: var(--heading); }
 .item:active { background: var(--chosen); }
 .item .label { flex: 1; min-width: 0; }
 .item .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -68,7 +74,8 @@ svg { display: block; }
 .problem { margin: 8px 4px; padding: 10px 12px; border-radius: 8px; background: #3a2a1a; color: #f3d9b0; font-size: 14px; }
 
 /* ---- a project: its tabs ---- */
-.project { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--canvas); }
+.project { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--canvas); -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.project textarea, .project input { -webkit-user-select: text; user-select: text; }
 #tab { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; }
 .tabs { display: flex; background: var(--chrome); border-top: 1px solid var(--border); padding: 4px calc(var(--right) + 8px) calc(var(--bottom) + 4px) calc(var(--left) + 8px); }
 .tabs button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0 4px; border-radius: 10px; color: var(--muted); font-size: 11px; font-weight: 500; transition: color .15s, transform .15s; }
@@ -77,26 +84,27 @@ svg { display: block; }
 .empty.big { padding: 80px 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
 
 /* two columns, cards falling into the shorter */
-.masonry { display: flex; gap: 12px; padding: 14px calc(var(--right) + 12px) 24px calc(var(--left) + 12px); align-items: flex-start; }
-.masonry .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.masonry { display: flex; gap: 14px; padding: 16px calc(var(--right) + 16px) 28px calc(var(--left) + 16px); align-items: flex-start; }
+.masonry .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .lcard, .bcard { display: block; width: 100%; text-align: left; transition: transform .16s cubic-bezier(.2,.9,.3,1.2), filter .16s; }
 .lcard:active, .bcard:active { transform: scale(.965); filter: brightness(1.1); }
 
 /* a list's card: Board's own, a little smaller */
-.lcard { border-radius: 6px; padding: 14px 13px 13px; }
-.lcard .stripe { height: 6px; border-radius: 2px; margin-bottom: 10px; }
-.lcard .title { font: 700 15px/1.25 var(--note); margin-bottom: 10px; overflow-wrap: anywhere; }
-.lcard .e { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 9px; border-radius: 4px; margin-top: 6px; font: 400 12.5px/1.3 var(--note); overflow-wrap: anywhere; }
+.lcard { border-radius: 16px; padding: 18px 16px 16px; }
+.lcard .stripe { height: 6px; border-radius: 3px; margin-bottom: 14px; }
+.lcard .title { font: 700 15.5px/1.25 var(--note); margin-bottom: 12px; overflow-wrap: anywhere; }
+.lcard .e { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 8px 11px; border-radius: 9px; margin-top: 7px; font: 400 12.5px/1.3 var(--note); overflow-wrap: anywhere; }
 .lcard .e.N { padding-left: 10px; }
 .lcard .e.H { min-height: 22px; padding: 4px 2px 0; font-weight: 700; font-size: 13.5px; }
 .lcard .e.done span { opacity: .5; text-decoration: line-through; }
 .lcard .e.done .box { opacity: .5; }
 .lcard .box { flex: none; width: 12px; height: 12px; border: 1.5px solid; border-radius: 2px; }
 .lcard .d { height: 3px; width: 50%; margin: 10px auto 4px; border-radius: 2px; }
-.lcard .more { margin-top: 8px; font-size: 12px; opacity: .6; }
+.lcard .more { margin-top: 10px; padding: 0 2px; font-size: 12px; opacity: .6; }
+.lcard .e span:last-child { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* a board's card: its picture, its name */
-.bcard canvas { display: block; width: 100%; border-radius: 8px; background: var(--card); }
+.bcard canvas { display: block; width: 100%; border-radius: 14px; background: var(--card); }
 .bcard .name { margin: 7px 2px 0; font-size: 13px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* the canvas to look around */
@@ -170,3 +178,12 @@ svg { display: block; }
 .swatch.none { background: linear-gradient(135deg, transparent 46%, #e07a6a 46%, #e07a6a 54%, transparent 54%), var(--button); }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* what is picked on the canvas: its bar along the bottom */
+.tools { position: absolute; left: 0; right: 0; margin: 0 auto; width: max-content; bottom: 14px; z-index: 4; display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 14px; background: var(--card); border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0,0,0,.4); white-space: nowrap; }
+.tools .what { display: flex; align-items: center; gap: 5px; padding: 0 10px 0 8px; font-size: 13px; color: var(--muted); }
+.tools button { min-height: 38px; padding: 0 14px; border-radius: 9px; font-size: 14px; font-weight: 500; }
+.tools button:active { background: var(--button); }
+.tools .danger { color: #ec8a7a; }
+.toast { position: fixed; left: 50%; bottom: calc(var(--bottom) + 90px); transform: translate(-50%, 10px); z-index: 50; padding: 10px 16px; border-radius: 12px; background: #2b2f2e; color: var(--ink); font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }

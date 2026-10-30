@@ -34,7 +34,7 @@ export async function finish()
     const q = new URLSearchParams(location.search);
     if (!q.has("code") && !q.has("error")) return false;
     history.replaceState(null, "", back());
-    if (q.has("error")) throw new Error(q.get("error_description") || "Dropbox didn't sign in.");
+    if (q.has("error")) throw new Error(q.get("error_description") || "Dropbox sign-in was cancelled.");
     const verifier = sessionStorage.getItem("canopy.verifier");
     sessionStorage.removeItem("canopy.verifier");
     const got = await tokenCall({ code: q.get("code"), grant_type: "authorization_code", code_verifier: verifier, client_id: key(), redirect_uri: back() });
@@ -113,7 +113,7 @@ export async function read(path)
 {
     const r = await fetch(CONTENT + "files/download", { method: "POST", headers: await headers({ "Dropbox-API-Arg": arg({ path }) }) });
     if (r.status === 401) { keep(null); throw new SignedOut(); }
-    if (!r.ok) throw new Error(r.status === 409 ? "That file isn't there any more." : "Couldn't read it from Dropbox (" + r.status + ").");
+    if (!r.ok) throw new Error(r.status === 409 ? "That file isn't there any more." : "Couldn't open it from Dropbox (" + r.status + ").");
     const meta = JSON.parse(r.headers.get("Dropbox-API-Result"));
     return { bytes: new Uint8Array(await r.arrayBuffer()), rev: meta.rev };
 }
@@ -132,5 +132,19 @@ export async function write(path, bytes, rev)
     if (r.status === 401) { keep(null); throw new SignedOut(); }
     if (r.status === 409) { const t = await r.text(); if (t.includes("conflict")) throw new Conflict(); throw new Error("Dropbox: " + t.slice(0, 200)); }
     if (!r.ok) throw new Error("Couldn't save to Dropbox (" + r.status + ").");
+    return (await r.json()).rev;
+}
+
+// A new file, only if there is none of that name there already.
+export async function create(path, bytes)
+{
+    const r = await fetch(CONTENT + "files/upload", {
+        method: "POST",
+        headers: await headers({ "Content-Type": "application/octet-stream", "Dropbox-API-Arg": arg({ path, mode: "add", autorename: false, mute: true }) }),
+        body: bytes
+    });
+    if (r.status === 401) { keep(null); throw new SignedOut(); }
+    if (r.status === 409) throw new Error("There's already a project called " + path.split("/").pop().replace(/\.cnpy$/i, "") + " in this folder.");
+    if (!r.ok) throw new Error("Couldn't create the project in Dropbox (" + r.status + ").");
     return (await r.json()).rev;
 }

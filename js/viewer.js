@@ -42,7 +42,14 @@ export class Viewer
     {
         if (this.queued) return;
         this.queued = true;
-        requestAnimationFrame(() => { this.queued = false; render.draw(this.ctx, this.scene(), this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw()); });
+        requestAnimationFrame(() =>
+        {
+            this.queued = false;
+            const sc = this.scene();
+            if (!sc || !this.canvas.isConnected) return;   // (gone since it was asked for)
+            render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw());
+            if (this.overlay) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
+        });
     }
 
     // An area of the canvas filling the view (with "pad" of the view around it), eased there when "glide".
@@ -73,6 +80,7 @@ export class Viewer
     // The middle of the view on the canvas, and how much of the canvas it shows.
     middle() { return { x: (this.w / 2 - this.cam.tx) / this.cam.s, y: (this.h / 2 - this.cam.ty) / this.cam.s, w: this.w / this.cam.s, h: this.h / this.cam.s }; }
     toCanvas(x, y) { return { x: (x - this.cam.tx) / this.cam.s, y: (y - this.cam.ty) / this.cam.s }; }
+    toScreen(x, y) { return { x: x * this.cam.s + this.cam.tx, y: y * this.cam.s + this.cam.ty }; }
 
     zoomAt(px, py, k)
     {
@@ -89,7 +97,9 @@ export class Viewer
         this.pointers.set(e.pointerId, this.at(e));
         this.moved = 0;
         this.downAt = performance.now();
-        if (this.pointers.size === 2) this.pinch = this.spread();
+        // One finger on something picked (or a handle of it): it is dragged, not the canvas ("grab" says what to do).
+        if (this.pointers.size === 1 && this.grab) this.held = this.grab(this.pointers.get(e.pointerId));
+        if (this.pointers.size === 2) { if (this.held) { this.held.end(); this.held = null; } this.pinch = this.spread(); }
     }
     spread()
     {
@@ -101,7 +111,8 @@ export class Viewer
         if (!this.pointers.has(e.pointerId)) return;
         const was = this.pointers.get(e.pointerId), now = this.at(e);
         this.pointers.set(e.pointerId, now);
-        if (this.pointers.size === 1)
+        if (this.pointers.size === 1 && this.held) { this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y); this.held.move(now, was); }
+        else if (this.pointers.size === 1)
         {
             this.cam.tx += now.x - was.x; this.cam.ty += now.y - was.y;
             this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y);
@@ -122,6 +133,7 @@ export class Viewer
         const p = this.pointers.get(e.pointerId);
         this.pointers.delete(e.pointerId);
         if (this.pointers.size < 2) this.pinch = null;
+        if (this.held && this.pointers.size === 0) { const h = this.held; this.held = null; h.end(); if (this.moved > 10) return; }
         if (this.pointers.size > 0 || this.moved > 10 || performance.now() - this.downAt > 400) return;
         const now = performance.now();
         if (now - this.lastTap < 300)
