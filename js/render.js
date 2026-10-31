@@ -33,10 +33,10 @@ function fromHsv(h, s, v)
     const [r, g, b] = k === 0 ? [c, x, 0] : k === 1 ? [x, c, 0] : k === 2 ? [0, c, x] : k === 3 ? [0, x, c] : k === 4 ? [x, 0, c] : [c, 0, x];
     return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
 }
-function derived(fill, i)   // one color of the set made from a list's color (7 its headings, 10 its card, 11 its entries)
+function derived(fill, i)   // one color of the set made from a list's color (7 its headings, 10 its card, 11 its entries), as Board's ListLayer.Colored
 {
     const [h, s] = toHsv(rgb(fill)), k = Math.min(1, s / 0.5);
-    const at = { 7: [0.32, 1.0], 10: [0.22, 0.22], 11: [0.22, 0.29] }[i];
+    const at = { 7: [0.45, 1.0], 10: [0.42, 0.22], 11: [0.40, 0.29] }[i];
     return hex(fromHsv(h, at[0] * k, at[1]));
 }
 // A list color's stripe, as Board makes one from it (bright enough to read as the list's own).
