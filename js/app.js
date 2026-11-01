@@ -1722,7 +1722,8 @@ function finishTyping(goOn, draw)
     {
         if (words !== "")
         {
-            const r = { id: cnpy.newId(), kind: was.kind, done: false, color: null, text: words, link: null };
+            const before = l && l.rows.find(o => o.id === was.after), like = before && before.kind === "T" ? before : l && [...l.rows].reverse().find(o => o.kind === "T");
+            const r = { id: cnpy.newId(), kind: was.kind, done: false, color: was.kind === "T" && like ? like.color : null, text: words, link: null };   // (a task takes the box color of the one before, as in Board)
             step({ t: "add", row: r, after: was.after });
             if (goOn) next = { fresh: true, after: r.id, kind: was.kind === "H" ? "T" : was.kind };
         }
