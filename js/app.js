@@ -190,6 +190,8 @@ function show()
 async function showFiles()
 {
     closeViewers();
+    document.documentElement.classList.remove("in-project");   // (come back from a project by the history, not by show: the page scrolls again)
+    requestAnimationFrame(footColor);
     const signed = dbx.ready() && dbx.signedIn();
     if (!signed)
     {
@@ -540,8 +542,9 @@ function showLists(holder)
     closeViewers();
     const lists = sortedLists();
     if (lists.length === 0) { holder.innerHTML = '<div class="empty big">No lists in this project yet' + (project.base.doc.readOnly ? "" : '<br><button class="quiet-button" data-do="newlist">New list</button>') + "</div>"; wire(holder); return; }
-    const cards = lists.map(l => ({ id: l.id, el: element(listCard(l)), weight: 3 + Math.min(4, visible(l).length) * 1.1 }));
+    const cards = lists.map(l => ({ id: l.id, el: element(listCard(l)), weight: 3 + guessTall(l) / 52 }));
     masonry(holder, cards, oneColumn);
+    trimCards(holder);
     if (!project.base.doc.readOnly) arrangeCards(holder, cards);
     if (project.base.doc.readOnly) holder.insertAdjacentHTML("afterbegin", '<div class="problem">This project was saved by an older version of Canopy Board, so it can be looked at here but not changed. Open and save it in Canopy Board to update it.</div>');
     if (problem) holder.insertAdjacentHTML("afterbegin", '<div class="problem">' + text(problem) + "</div>");
@@ -652,16 +655,40 @@ function arrangeCards(holder, cards)
         place();
     }
 }
+// A list's card shows its first entries, as many as fill about the same height (PEEK, in pixels), so short entries
+// show more of the list and long ones fewer (each at most two lines), at least one: drawn with a dozen, then cut to
+// fit once laid out (trimCards). Its weight in the columns, before then, is guessed from the entries' lengths.
+const PEEK = 250;
+function guessTall(l)
+{
+    let tall = 0;
+    for (const r of visible(l).slice(0, 12)) tall += r.kind === "D" ? 17 : r.kind === "H" ? 29 : 25 + 16 * Math.min(2, Math.max(1, Math.ceil(cnpy.plain(r.text || "").length / 16)));
+    return Math.min(PEEK, tall);
+}
+function trimCards(holder)
+{
+    holder.querySelectorAll(".lcard").forEach(card =>
+    {
+        const rows = [...card.querySelectorAll(":scope > .e, :scope > .d")], more = card.querySelector(".more");
+        if (!rows.length) return;
+        const top = rows[0].getBoundingClientRect().top;
+        let kept = rows.findIndex((r, i) => i > 0 && r.getBoundingClientRect().bottom - top > PEEK);
+        if (kept < 0) kept = rows.length;
+        rows.slice(kept).forEach(r => r.remove());
+        const hidden = Number(card.dataset.count) - kept;
+        if (hidden > 0) more.textContent = "+" + hidden + " more"; else more.remove();
+    });
+}
 function listCard(l)
 {
-    const c = render.listLook(l), rows = visible(l), shown = rows.slice(0, 4);
-    return '<button class="lcard" data-do="list" data-value="' + text(l.id) + '" style="background:' + c.card + ";color:" + c.onCard + '">'
+    const c = render.listLook(l), rows = visible(l), shown = rows.slice(0, 12);
+    return '<button class="lcard" data-do="list" data-value="' + text(l.id) + '" data-count="' + rows.length + '" style="background:' + c.card + ";color:" + c.onCard + '">'
         + '<div class="band" style="background:' + c.stripe + '"></div><div class="title">' + text(l.name || "List") + "</div>"
         + shown.map(r => r.kind === "D" ? '<div class="d" style="background:' + render.shade(c.tile, 0.14) + '"></div>'
             : '<div class="e ' + r.kind + (r.done ? " done" : "") + '" style="' + (r.kind === "H" ? "" : "background:" + c.tile + ";color:" + c.ink) + '">'
                 + (r.kind === "T" ? '<span class="box" style="border-color:' + (r.color || c.box) + (r.done ? ";background:" + (r.color || c.box) : "") + '"></span>' : "")
                 + "<span>" + text(cnpy.plain(r.text)) + "</span></div>").join("")
-        + (rows.length > shown.length ? '<div class="more">+' + (rows.length - shown.length) + " more</div>" : "")
+        + '<div class="more"></div>'
         + "</button>";
 }
 
