@@ -4,7 +4,9 @@
 // exactly as it was read, so the desktop app merges the change in as one person's edit.
 
 const ROWS_SINCE = 3;   // the layers.txt version from which entries have their own ids (older files open to read only)
-const SEP = "\u001f";   // between the names of the groups an object is in
+const SEP = "\u001f";
+export const DENSITY = 2;   // a drawing's pixels to a canvas unit, as Board makes new ones (DrawingLayer.Density)
+export const TILE = 256;    // a drawing's tiles, as Board's (Raster.T)   // between the names of the groups an object is in
 
 // Board's escaping of a field: backslash, new line and the bar that separates fields.
 export function escape(s) { return (s || "").replace(/\\/g, "\\\\").replace(/\r/g, "").replace(/\n/g, "\\n").replace(/\|/g, "\\p"); }
@@ -122,7 +124,7 @@ export function parse(text)
         const sp = line.indexOf(" ");
         const key = sp < 0 ? line : line.substring(0, sp), rest = sp < 0 ? "" : line.substring(sp + 1);
         if (key === "row" && list) { list.rows.push(readRow(rest)); list.end = i + 1; continue; }
-        if (last && (key === "grad" || key === "runs" || key === "fx"))
+        if (last && (key === "grad" || key === "runs" || key === "fx" || key === "href"))   // (href: its link, Board's Links)
         {
             last[key] = rest;
             if (list && list.rows.length === 0) list.end = i + 1;   // (its own extra lines come before its entries)
@@ -133,6 +135,7 @@ export function parse(text)
         if (key === "CanopyBoard" || key === "CanopyCreator") { const v = parseInt(rest, 10); if (v > doc.version) doc.version = v; }
         else if (key === "canvas") doc.canvas = rest.trim();
         else if (key === "palette") doc.palette = rest.split(" ").filter(c => /^#[0-9A-Fa-f]{6,8}$/.test(c));
+        else if (key === "recent") doc.recent = rest.split(" ").filter(c => /^#[0-9A-Fa-f]{6,8}$/.test(c));   // (the colors last used: the brush's to pick from)
         else if (key === "boards") { doc.boardsLine = i; const f = rest.split(" "); doc.boardColor = col(f[0]); doc.boardLook = parseInt(f[1], 10) || 0; }
         else if (key === "folders") rest.split(" ").filter(Boolean).forEach(x => doc.folders.add(x));
         else if (key === "hides") rest.split(" ").filter(Boolean).forEach(x => doc.hides.add(x));
@@ -225,7 +228,7 @@ const n = v => String(Math.round(v * 1000) / 1000);
 
 // The project's text as "view" has it: the lists' entries, names and colors; objects moved, sized or deleted; boards
 // added (after the others); and lists and photos added (after everything, on top).
-export function write(doc, view)
+export function write(doc, view, drawn)
 {
     const lines = doc.lines.slice();
     const byId = new Map(view.lists.map(l => [l.id, l]));
@@ -288,6 +291,10 @@ export function write(doc, view)
     for (const p of view.photos)
         added.push(metaLine(p.id, p.layer, p.author, p.locked), "image " + [p.file, n(p.x), n(p.y), n(p.w), n(p.h), 0, 0, p.pw, p.ph, escape(p.name)].join("|"));
     for (const r of view.restored) added.push(...(r.by ? r.lines.map((l, i) => i === r.body ? placedLine(l, r.item, r.by) : l) : r.lines));   // (deleted, saved, and then brought back)
+    // Drawings made here, painted into tiles (paintSketches): drawing layers as Board writes them, their pixels in the
+    // folder named for them, at Density pixels to a unit from the canvas's corner.
+    for (const k of drawn || [])
+        added.push(metaLine(k.id, k.layer, k.author, false), "paint " + [k.id + "/", n(k.frame.x / DENSITY), n(k.frame.y / DENSITY), n(k.frame.w / DENSITY), n(k.frame.h / DENSITY), 0, 0, escape(k.name), k.frame.x, k.frame.y, k.frame.w, k.frame.h].join("|"));
     lines.splice(tail, 0, ...added);
     return lines.join("\n");
 }
@@ -321,9 +328,10 @@ export async function open(bytes)
 }
 
 // The project file again, as "view" has it ("pictures": the added photos' files, by name); every other file untouched.
-export async function save(doc, view, pictures)
+export async function save(doc, view, pictures, drawn)
 {
-    const text = write(doc, view);
+    const text = write(doc, view, drawn);
+    for (const k of drawn || []) for (const [name, bytes] of k.tiles) doc.zip.file(k.id + "/" + name, bytes, { compression: "STORE" });
     doc.zip.file("layers.txt", (doc.bom ? "\uFEFF" : "") + text, { compression: "DEFLATE" });
     for (const p of view.photos) if (!doc.zip.file(p.file) && pictures.has(p.file)) doc.zip.file(p.file, pictures.get(p.file), { compression: "STORE" });
     for (const r of view.restored) if (r.item.kind === "image" && !doc.zip.file(r.item.file) && pictures.has(r.item.file)) doc.zip.file(r.item.file, pictures.get(r.item.file), { compression: "STORE" });   // (pasted from another project)
@@ -339,6 +347,7 @@ export function apply(doc, steps)
     const lists = doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) }));
     const photos = [], deleted = new Set(), removed = new Set(), moved = new Map(), boards = [], locks = new Map(), unlocked = new Set();
     const relocked = new Set(), goneBoards = new Set(), restored = [];
+    const sketches = [];   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
     let order = null;   // the lists' order, once set here
     const items = new Map(doc.items.map(o => [o.id, o]));
     const ids = new Set(doc.items.map(o => o.id));   // (already in the file: a save that went through, its answer lost)
@@ -346,6 +355,19 @@ export function apply(doc, steps)
     const place = (rows, after) => { if (after === null) return 0; const k = rows.findIndex(r => r.id === after); return k < 0 ? rows.length : k + 1; };
     for (const s of steps)
     {
+        if (s.t === "stroke" || s.t === "unstroke")
+        {
+            // A stroke drawn here (into a drawing of its own, made with its first), or taken away again.
+            if (ids.has(s.id)) continue;   // (saved already)
+            let k = sketches.find(o => o.id === s.id);
+            if (s.t === "stroke")
+            {
+                if (!k) sketches.push(k = { id: s.id, name: s.name, layer: s.layer, author: s.author, strokes: [] });
+                if (!k.strokes.some(o => o.sid === s.stroke.sid)) k.strokes.push(s.stroke);
+            }
+            else if (k) { k.strokes = k.strokes.filter(o => o.sid !== s.sid); if (k.strokes.length === 0) sketches.splice(sketches.indexOf(k), 1); }
+            continue;
+        }
         if (s.t === "place" || s.t === "delobj")
         {
             // Objects moved and sized (a shift, then a scale about a point), or deleted: whichever kind, wherever made.
@@ -400,7 +422,7 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches };
 }
 
 // ---- undoing: what a step would be undone by, worked out from the project as it is before the step ----
@@ -481,6 +503,8 @@ export function inverse(doc, view, s)
     const old = (from, fields) => Object.fromEntries(Object.keys(fields).map(k => [k, from[k] === undefined ? null : from[k]]));
     switch (s.t)
     {
+        case "stroke": return [{ t: "unstroke", list: null, id: s.id, sid: s.stroke.sid }];
+        case "unstroke": { const k = view.sketches.find(o => o.id === s.id), st = k && k.strokes.find(o => o.sid === s.sid); return st ? [{ t: "stroke", list: null, id: k.id, name: k.name, layer: k.layer, author: k.author, stroke: st }] : []; }
         case "set": { const r = l && l.rows.find(o => o.id === s.id); return r ? [{ t: "set", list, id: s.id, fields: old(r, s.fields) }] : []; }
         case "add": return [{ t: "del", list, id: s.row.id }];
         case "del": { const k = l ? l.rows.findIndex(o => o.id === s.id) : -1; return k < 0 ? [] : [{ t: "add", list, row: { ...l.rows[k] }, after: k > 0 ? l.rows[k - 1].id : null }]; }

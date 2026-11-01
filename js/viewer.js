@@ -106,8 +106,8 @@ export class Viewer
         this.moved = 0;
         this.downAt = performance.now();
         // One finger on something picked (or a handle of it): it is dragged, not the canvas ("grab" says what to do).
-        if (this.pointers.size === 1 && this.grab) this.held = this.grab(this.pointers.get(e.pointerId));
-        if (this.pointers.size === 2) { if (this.held) { this.held.end(); this.held = null; } this.pinch = this.spread(); }
+        if (this.pointers.size === 1 && this.grab) this.held = this.grab(this.pointers.get(e.pointerId), e);
+        if (this.pointers.size === 2) { if (this.held) { if (this.held.cancel) this.held.cancel(); else this.held.end(); this.held = null; } this.pinch = this.spread(); }   // (a stroke begun is taken back: two fingers pan)
     }
     spread()
     {
@@ -119,7 +119,7 @@ export class Viewer
         if (!this.pointers.has(e.pointerId)) return;
         const was = this.pointers.get(e.pointerId), now = this.at(e);
         this.pointers.set(e.pointerId, now);
-        if (this.pointers.size === 1 && this.held) { this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y); this.held.move(now, was); }
+        if (this.pointers.size === 1 && this.held) { this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y); this.held.move(now, was, e); }
         else if (this.pointers.size === 1)
         {
             this.cam.tx += now.x - was.x; this.cam.ty += now.y - was.y;

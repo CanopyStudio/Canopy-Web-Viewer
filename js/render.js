@@ -339,6 +339,7 @@ export function scene(doc, view)
         .map(o => view.locks.has(o.id) ? { ...o, locked: view.locks.get(o.id) } : o);
     for (const l of view.lists) if (l.fresh) items.push(l);
     for (const r of view.restored) items.push(r.by ? placed(r.item, r.by) : r.item);
+    for (const k of view.sketches || []) items.push(sketchItem(k));   // drawings made here, on top until saved
     for (const p of view.photos) items.push({ kind: "image", locked: !!p.locked, id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
     const masks = new Map();   // a clipped group's path → its mask (the topmost of it, marked as one)
     const top = new Map();
@@ -414,13 +415,6 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         ctx.roundRect(b.x, b.y, b.w, b.h, doc.boardLook !== 0 ? 0 : Math.min(8 / s, b.w / 2, b.h / 2));
         if (doc.boardLook === 1) { ctx.strokeStyle = shade(doc.canvas, 0.3); ctx.lineWidth = 1 / s; ctx.stroke(); }
         else { ctx.fillStyle = fill; ctx.fill(); }
-        if (opts.names !== false)
-        {
-            ctx.font = "500 " + 12 / s + "px 'IBM Plex Sans', system-ui, sans-serif";
-            ctx.fillStyle = dark(doc.canvas) ? "rgba(234,236,235,.55)" : "rgba(21,22,22,.55)";
-            ctx.textBaseline = "bottom";
-            ctx.fillText(b.name, b.x, b.y - 6 / s);
-        }
     }
     for (const o of sc.items)
     {
@@ -438,7 +432,64 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         try { drawOne(ctx, o, doc, s, get, redraw); } catch (e) { }
         ctx.restore();
     }
+    // The boards' names, over the art (a picture reaching over a board's top edge never hides one).
+    if (opts.names !== false)
+    {
+        ctx.font = "500 " + 12 / s + "px 'IBM Plex Sans', system-ui, sans-serif";
+        ctx.fillStyle = dark(doc.canvas) ? "rgba(234,236,235,.55)" : "rgba(21,22,22,.55)";
+        ctx.textBaseline = "bottom";
+        for (const b of sc.boards) if (meets({ x: b.x, y: b.y - 24 / s, w: b.w, h: 24 / s })) ctx.fillText(b.name, b.x, b.y - 6 / s);
+    }
 }
+
+// ---- drawings made here: strokes kept as points until saved (then painted into a drawing layer's tiles) ----
+
+// A drawing made here, as the scene has it: its strokes, and the box they reach.
+export function sketchItem(k)
+{
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const st of k.strokes)
+        for (let i = 0; i < st.pts.length; i += 3) { const r = st.size / 2 + 1; x0 = Math.min(x0, st.pts[i] - r); y0 = Math.min(y0, st.pts[i + 1] - r); x1 = Math.max(x1, st.pts[i] + r); y1 = Math.max(y1, st.pts[i + 1] + r); }
+    if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
+    return { kind: "sketch", id: k.id, name: k.name, strokes: k.strokes, x: x0, y: y0, w: x1 - x0, h: y1 - y0, group: k.layer ? k.layer.id : null, opacity: 1, blend: "normal", angle: 0, shear: 0 };
+}
+// Strokes drawn onto a canvas set to canvas units: a pen's line as wide as it is pressed, a marker's an even width
+// and see-through, an eraser rubbing out (on the drawing's own canvas: only what is drawn there).
+export function drawStrokes(g, strokes)
+{
+    g.lineCap = "round"; g.lineJoin = "round";
+    for (const st of strokes)
+    {
+        const p = st.pts, n = p.length / 3;
+        if (n === 0) continue;
+        g.save();
+        g.globalCompositeOperation = st.kind === "erase" ? "destination-out" : "source-over";
+        g.strokeStyle = g.fillStyle = st.kind === "erase" ? "#000" : st.color;
+        if (st.kind === "marker")
+        {
+            g.globalAlpha = 0.55;
+            g.lineWidth = st.size;
+            g.beginPath(); g.moveTo(p[0], p[1]);
+            if (n === 1) g.lineTo(p[0] + 0.01, p[1]);
+            for (let i = 1; i < n; i++) { const mx = (p[(i - 1) * 3] + p[i * 3]) / 2, my = (p[(i - 1) * 3 + 1] + p[i * 3 + 1]) / 2; g.quadraticCurveTo(p[(i - 1) * 3], p[(i - 1) * 3 + 1], mx, my); }
+            if (n > 1) g.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
+            g.stroke();
+        }
+        else
+        {
+            // Piece by piece, each as wide as the pressure at its end (so it swells and thins along the way).
+            const w = i => st.size * Math.max(0.12, p[i * 3 + 2]);
+            if (n === 1) { g.beginPath(); g.arc(p[0], p[1], w(0) / 2, 0, Math.PI * 2); g.fill(); }
+            for (let i = 1; i < n; i++)
+            {
+                g.lineWidth = (w(i - 1) + w(i)) / 2;
+                g.beginPath(); g.moveTo(p[(i - 1) * 3], p[(i - 1) * 3 + 1]); g.lineTo(p[i * 3], p[i * 3 + 1]); g.stroke();
+            }
+        }
+        g.restore();
+    }
+}
+let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then laid on the view)
 
 function turn(ctx, o, b) { if (o.angle || o.shear) { const m = placing(o, b); ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f); } }
 function flip(ctx, o, b)
@@ -678,6 +729,19 @@ function drawOne(ctx, o, doc, s, get, redraw)
             if (sw > 0 && sh > 0) ctx.drawImage(img, sx, sy, sw, sh, b.x, b.y, b.w, b.h);
             return;
         }
+        case "sketch":
+        {
+            // Drawn on a canvas of its own the view's size (so its eraser rubs out only its own), then laid on.
+            const m = ctx.getTransform(), cv = ctx.canvas;
+            if (!sketchCanvas) sketchCanvas = document.createElement("canvas");
+            if (sketchCanvas.width !== cv.width || sketchCanvas.height !== cv.height) { sketchCanvas.width = cv.width; sketchCanvas.height = cv.height; }
+            const g = sketchCanvas.getContext("2d");
+            g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
+            g.setTransform(m);
+            drawStrokes(g, o.strokes);
+            ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
+            return;
+        }
         case "paint":
         {
             const tiles = tilesOf(doc, o.file);
@@ -876,7 +940,7 @@ export function objectAt(sc, x, y, slack)
     for (let i = sc.items.length - 1; i >= 0; i--)
     {
         const o = sc.items[i];
-        if (hidden(sc.doc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
+        if (hidden(sc.doc, o) || (o.clip && sc.masks.get(o.group) === o) || o.kind === "sketch") continue;   // (a drawing made here: not picked until saved)
         if (o.kind === "line" || o.kind === "arrow")
         {
             const dx = o.bx - o.ax, dy = o.by - o.ay, len = dx * dx + dy * dy, t = len ? Math.max(0, Math.min(1, ((x - o.ax) * dx + (y - o.ay) * dy) / len)) : 0;

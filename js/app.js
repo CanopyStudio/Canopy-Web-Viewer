@@ -492,7 +492,7 @@ function sortedLists()
 function showProject()
 {
     const locked = project.base.doc.readOnly;
-    const add = locked ? "" : tab === "lists" ? iconButton("newlist", "plus", "New list") : tab === "boards" ? iconButton("newboard", "plus", "New board") : iconButton("photo", "photo", "Add a photo");
+    const add = locked ? "" : tab === "lists" ? iconButton("newlist", "plus", "New list") : tab === "boards" ? iconButton("newboard", "plus", "New board") : iconButton("draw", "draw", "Draw") + iconButton("photo", "photo", "Add a photo");
     let shell = app.querySelector(".project");
     if (!shell || shell.dataset.path !== project.path)
     {
@@ -771,9 +771,9 @@ let lifted = false;  // what is picked being moved or sized by a finger (drawn l
 
 function editable(v)
 {
-    v.onTap = (x, y) => tapObject(v, x, y);
+    v.onTap = (x, y) => { if (!pen) tapObject(v, x, y); };   // (drawing: a tap is a dot, not a pick)
     v.overlay = ctx => drawPicked(v, ctx);
-    v.grab = at => grabPicked(v, at);
+    v.grab = (at, e) => pen ? strokeFrom(v, at, e) : grabPicked(v, at);
     tools(v);   // (something copied: ready to paste)
 }
 function pickedBox()
@@ -891,6 +891,8 @@ function tools(v)
 {
     const host = v.host.parentNode;
     let bar = host.querySelector(".tools");
+    if (pen) { drawBar(v, bar, host); return; }
+    if (bar && bar.classList.contains("drawbar")) { bar.remove(); bar = null; }
     const pasting = !picked && clip && !project.base.doc.readOnly;
     if (!picked && !pasting) { if (bar) bar.remove(); return; }
     if (!bar) { bar = element('<div class="tools"></div>'); host.appendChild(bar); if (!calm) bar.animate([{ transform: "translateY(16px)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 220, easing: "cubic-bezier(.2,1.2,.3,1)" }); }
@@ -903,7 +905,9 @@ function tools(v)
         return;
     }
     const n = picked.ids.length, shut = pickedLocked();
+    const href = (project.scene.items.find(o => picked.ids.includes(o.id) && o.href) || {}).href;   // a link it has (Board's Links)
     bar.innerHTML = '<span class="what">' + (shut ? icon("lock", 15) : "") + (picked.list ? "List" : n > 1 ? "Group of " + n : kindName(picked.ids[0])) + "</span>"
+        + (href ? '<button data-act="link" class="linkto">' + icon("link", 15) + "<span>" + text(linkWords(href)) + "</span></button>" : "")
         + (picked.list ? '<button data-act="open">Open</button>' : "")
         + '<button data-act="lock">' + (shut ? "Unlock" : "Lock") + "</button>"
         + '<button data-act="copy">Copy</button>'
@@ -911,6 +915,7 @@ function tools(v)
     bar.querySelectorAll("button").forEach(b => b.addEventListener("click", () =>
     {
         if (b.dataset.act === "open") openList(picked.list, null);
+        else if (b.dataset.act === "link") openLink(href, v);
         else if (b.dataset.act === "copy") copyPicked(v);
         else if (b.dataset.act === "delete") { const ids = picked.ids; pick(null, v); step({ t: "delobj", ids, list: null }); feel.gone(); v.redraw(); }
         else if (b.dataset.act === "lock")
@@ -978,6 +983,120 @@ function paste(v)
     redrawViewers();
 }
 
+// ---- drawing: strokes on the canvas or a board, kept as points (each a step, undone as one) and painted into a new
+// drawing layer as the project is saved (paintSketches), as Board makes its own: one for each time Draw is begun ----
+
+let pen = null;          // drawing, how: { kind: "pen" | "marker" | "erase", size (on the screen), color }; null when not
+let sketchId = null;     // the drawing these strokes go into (made with the first)
+const SIZES = [3, 8, 16, 32];
+const INKS = ["#EAECEB", "#151616", "#E05A47", "#F2B53A", "#4FB477", "#3F8FD8", "#8E5BD6", "#E45FA8"];
+function drawMode()
+{
+    const v = boardView || canvasView;
+    if (!v || !project || project.base.doc.readOnly) return;
+    if (pen) { pen = null; tools(v); if (project.steps.length) { clearTimeout(saveTimer); save(); } return; }
+    const was = remembered("canopy.pen", null) || {};
+    pen = { kind: was.kind || "pen", size: SIZES.includes(was.size) ? was.size : 8, color: was.color || (project.base.doc.recent || [])[0] || INKS[0] };
+    sketchId = null;   // (a new drawing each time)
+    pick(null, v);
+}
+function keepPen() { remember("canopy.pen", { kind: pen.kind, size: pen.size, color: pen.color }); }
+function drawBar(v, bar, host)
+{
+    if (!bar) { bar = element('<div class="tools drawbar"></div>'); host.appendChild(bar); }
+    bar.classList.add("drawbar");
+    const kinds = [["pen", "pencil", "Pen"], ["marker", "marker", "Marker"], ["erase", "eraser", "Eraser"]];
+    // (the size and color in one: a dot of the color, as big as the brush, opening both)
+    bar.innerHTML = kinds.map(k => '<button class="glyph' + (pen.kind === k[0] ? " on" : "") + '" data-kind="' + k[0] + '" aria-label="' + k[2] + '" title="' + k[2] + '">' + icon(k[1], 20) + "</button>").join("")
+        + '<span class="sep"></span><button class="glyph ink" data-act="ink" aria-label="Size and color" title="Size and color">' + dot(pen.size, pen.color) + "</button>"
+        + '<button data-act="done">Done</button>';
+    bar.querySelectorAll("[data-kind]").forEach(b => b.addEventListener("click", () => { pen.kind = b.dataset.kind; keepPen(); tools(v); }));
+    bar.querySelector('[data-act="ink"]').addEventListener("click", () => inkMenu(v));
+    bar.querySelector('[data-act="done"]').addEventListener("click", () => { pen = null; tools(v); if (project.steps.length) { clearTimeout(saveTimer); save(); } });
+}
+function dot(size, color) { const d = Math.max(5, Math.min(24, size * 0.75)); return '<i style="width:' + d + "px;height:" + d + "px;background:" + color + '"></i>'; }
+// The brush's size, and the colors to draw in: the project's last used and its palette, then a few of the app's own.
+function inkMenu(v)
+{
+    const doc = project.base.doc, all = [...new Set([...(doc.recent || []), ...doc.palette, ...INKS].map(c => c.slice(0, 7).toUpperCase()))].slice(0, 24);
+    sheetUp(() => '<div class="section first">Size</div><div class="sizes">' + SIZES.map(z => '<button class="sizedot' + (z === pen.size ? " on" : "") + '" data-do="size" data-value="' + z + '" aria-label="Size ' + z + '">' + dot(z, pen.color) + "</button>").join("") + "</div>"
+        + '<div class="section">Color</div><div class="inks">' + all.map(c => '<button class="inkdot' + (c === pen.color.toUpperCase() ? " on" : "") + '" data-do="ink" data-value="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>').join("") + "</div>",
+        (does, value, close, again) =>
+        {
+            if (does === "size") { pen.size = +value; keepPen(); tools(v); again(); }
+            if (does === "ink") { pen.color = value; if (pen.kind === "erase") pen.kind = "pen"; keepPen(); close(() => tools(v)); }
+        });
+}
+// The next free name for a drawing: Drawing 1, 2, ..., past the project's own and those made here.
+function drawingName()
+{
+    const taken = new Set(project.scene.items.filter(o => o.kind === "paint" || o.kind === "sketch").map(o => o.name));
+    let n = 1;
+    while (taken.has("Drawing " + n)) n++;
+    return "Drawing " + n;
+}
+// A stroke, from a press: shown as it goes (the project's preview step), kept as a step when the finger lifts; a
+// second finger (to pan or zoom) takes it back.
+function strokeFrom(v, at, e)
+{
+    if (!sketchId || project.base.doc.items.some(o => o.id === sketchId)) sketchId = cnpy.newId();   // (saved meanwhile: the rest go into a drawing of their own)
+    const k = project.view.sketches.find(o => o.id === sketchId);
+    const s = { t: "stroke", list: null, id: sketchId, name: k ? k.name : drawingName(), layer: k ? k.layer : cnpy.topLayer(project.base.doc), author: dbx.who(),
+        stroke: { sid: cnpy.newId(), kind: pen.kind, color: pen.color, size: Math.round(pen.size / v.cam.s * 100) / 100, pts: [] } };
+    const pts = s.stroke.pts;
+    let lx = null, ly = null;
+    const add = (p, ev) =>
+    {
+        if (lx !== null && Math.hypot(p.x - lx, p.y - ly) < 0.75) return;   // (closer than a pixel or so: no new point)
+        lx = p.x; ly = p.y;
+        const c = v.toCanvas(p.x, p.y), pressure = ev && ev.pointerType === "pen" ? Math.max(0.05, ev.pressure || 0.5) : 1;
+        pts.push(Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(pressure * 100) / 100);
+    };
+    add(at, e);
+    project.preview = s;
+    refreshView(); v.redraw();
+    return {
+        move(now, was, ev)
+        {
+            const evs = ev && ev.getCoalescedEvents ? ev.getCoalescedEvents() : [];
+            if (evs.length) for (const one of evs) add(v.at(one), one); else add(now, ev);
+            v.redraw();
+        },
+        end() { project.preview = null; step(s); redrawViewers(); },
+        cancel() { project.preview = null; refreshView(); v.redraw(); }
+    };
+}
+// The drawings made here, painted into tiles as Board keeps a drawing layer's pixels (cnpy.TILE square, at cnpy.DENSITY
+// to a unit, from the canvas's corner), for the file: tiles with nothing on them left out.
+async function paintSketches(view)
+{
+    const out = [], D = cnpy.DENSITY, T = cnpy.TILE;
+    for (const k of view.sketches || [])
+    {
+        const it = render.sketchItem(k);
+        if (it.w <= 0 || it.h <= 0) continue;
+        const fx0 = Math.floor(it.x * D), fy0 = Math.floor(it.y * D), fx1 = Math.ceil((it.x + it.w) * D), fy1 = Math.ceil((it.y + it.h) * D);
+        const tiles = new Map();
+        for (let r = Math.floor(fy0 / T); r <= Math.floor((fy1 - 1) / T); r++)
+            for (let c = Math.floor(fx0 / T); c <= Math.floor((fx1 - 1) / T); c++)
+            {
+                const cv = document.createElement("canvas");
+                cv.width = cv.height = T;
+                const g = cv.getContext("2d", { willReadFrequently: true });
+                g.setTransform(D, 0, 0, D, -c * T, -r * T);
+                render.drawStrokes(g, k.strokes);
+                const px = g.getImageData(0, 0, T, T).data;
+                let any = false;
+                for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
+                if (!any) continue;
+                const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
+                tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
+            }
+        if (tiles.size) out.push({ id: k.id, name: k.name, layer: k.layer, author: k.author, frame: { x: fx0, y: fy0, w: fx1 - fx0, h: fy1 - fy0 }, tiles });
+    }
+    return out;
+}
+
 // The photo button: a photo from the phone, or the image it has copied (from a web page, say).
 function photoMenu()
 {
@@ -1035,6 +1154,21 @@ document.addEventListener("paste", e =>
     placeCopied(file ? { image: file } : clip && (!words || words === clip.mark) ? { words: clip.mark } : { words });
 });
 
+// An object's link (Board's Links): a web address, or a board or object of the project (its id).
+function webLink(href) { return /:\/\//.test(href) || /^www\./i.test(href) || /^mailto:/i.test(href); }
+function linkWords(href)
+{
+    if (webLink(href)) return href.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+    const to = render.linked(project.scene, href);
+    return to ? (to.board ? to.board.name : to.item ? to.item.name || "Linked object" : "Linked") : "Linked";
+}
+function openLink(href, v)
+{
+    if (webLink(href)) { window.open(/^www\./i.test(href) ? "https://" + href : href, "_blank", "noopener"); return; }
+    pick(null, v);
+    follow(href);
+}
+
 function kindName(id)
 {
     const o = project.scene.items.find(x => x.id === id);
@@ -1053,6 +1187,7 @@ function toast(words)
 function closeViewers()
 {
     picked = null;
+    pen = null;
     if (canvasView && project) remember("canopy.cam." + project.path, canvasView.cam);
     if (canvasView) canvasView.canvas.remove();
     canvasView = null;
@@ -1219,7 +1354,7 @@ function showBoard(over)
     }
     else boardView.redraw();
     const head = wrap.querySelector(".head");
-    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + undoButtons() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("photo", "photo", "Add a photo")));
+    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + undoButtons() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("draw", "draw", "Draw") + iconButton("photo", "photo", "Add a photo")));
     wire(head);
 }
 
@@ -1299,7 +1434,7 @@ function changed()
     if (project.local) return;
     setState("saving");
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(save, 900);
+    saveTimer = setTimeout(save, pen ? 20000 : 900);   // (drawing: saved once it pauses a while, or Done; each time Draw is begun, one drawing)
 }
 function keepSteps() { if (project && !project.local) remember("canopy.steps." + project.path, project.steps.length ? project.steps : null); }
 
@@ -1314,7 +1449,8 @@ async function save()
         for (let tries = 0; tries < 5; tries++)
         {
             const n = p.steps.length;
-            const bytes = await cnpy.save(p.base.doc, cnpy.apply(p.base.doc, p.steps.slice(0, n)), p.pictures);
+            const upto = cnpy.apply(p.base.doc, p.steps.slice(0, n));
+            const bytes = await cnpy.save(p.base.doc, upto, p.pictures, await paintSketches(upto));
             try
             {
                 const rev = await dbx.write(p.path, bytes, p.base.rev);
@@ -1520,7 +1656,7 @@ async function openLocal(file)
 
 async function saveCopy()
 {
-    const bytes = await cnpy.save(project.base.doc, project.view, project.pictures);
+    const bytes = await cnpy.save(project.base.doc, project.view, project.pictures, await paintSketches(project.view));
     const blob = new Blob([bytes], { type: "application/octet-stream" }), name = project.name + ".cnpy";
     if (navigator.canShare && navigator.canShare({ files: [new File([blob], name)] })) { try { await navigator.share({ files: [new File([blob], name)] }); return; } catch (e) { if (e.name === "AbortError") return; } }
     const a = document.createElement("a");
@@ -1888,7 +2024,7 @@ function linkTargets()
     for (let i = sc.items.length - 1; i >= 0; i--)
     {
         const o = sc.items[i];
-        if (o.id === (open && open.id)) continue;
+        if (o.id === (open && open.id) || o.kind === "sketch") continue;
         let g = null;
         if (o.group) { const ids = o.group.split("/"); const k = doc.folders.has(ids[0]) ? 1 : 0; if (ids.length > k) g = ids.slice(0, k + 1).join("/"); }
         if (g) { if (groups.has(g)) continue; groups.add(g); out.push({ id: o.id, name: (o.groupName || "").split("\u001f")[g.split("/").length - 1] || "Group", kind: "Group", items: sc.items.filter(x => x.group && (x.group === g || x.group.startsWith(g + "/"))) }); continue; }
@@ -2072,6 +2208,7 @@ function act(what, value, ev, el)
             break;
         }
         case "photo": photoMenu(); break;
+        case "draw": drawMode(); break;
         case "arrange": finishTyping(false, false); arranging = !arranging; editing = null; show(); break;
         case "retitle": if (project.base.doc.readOnly || arranging) break; finishTyping(false, false); editing = { title: true }; show(); break;
         case "follow": follow(value); break;

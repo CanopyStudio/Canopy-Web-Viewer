@@ -245,6 +245,19 @@ svg { display: block; }
 .tools .what { display: flex; align-items: center; gap: 5px; padding: 0 10px 0 8px; font-size: 13px; color: var(--muted); }
 .tools button { min-height: 38px; padding: 0 14px; border-radius: var(--r-control); font-size: 14px; font-weight: 500; }
 .tools button:active { background: var(--button); }
+/* Draw: the pen, marker and eraser, four sizes, the color, Done */
+.drawbar .glyph { min-width: 40px; padding: 0; display: grid; place-items: center; color: var(--muted); }
+.drawbar .glyph.on { background: var(--chosen); color: var(--heading); }
+.drawbar .ink i, .sizedot i { display: block; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--border); }
+.sizes { display: flex; gap: 10px; padding: 4px 4px 6px; }
+.sizedot { flex: 1; height: 52px; display: grid; place-items: center; border-radius: var(--r-control); background: var(--button); }
+.sizedot.on { background: var(--chosen); outline: 2px solid var(--accent); }
+.drawbar .sep { flex: none; width: 1px; align-self: stretch; margin: 6px 3px; background: var(--border); }
+.inks { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; padding: 4px 4px 18px; }
+.inkdot { aspect-ratio: 1; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+.inkdot.on { outline: 3px solid var(--accent); outline-offset: 2px; }
+.tools .linkto { display: inline-flex; align-items: center; gap: 6px; max-width: 46vw; color: var(--heading); }
+.tools .linkto span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tools .danger { color: #ec8a7a; }
 .toast { position: fixed; left: 50%; bottom: calc(var(--bottom) + 90px); transform: translate(-50%, 10px); z-index: 50; padding: 10px 16px; border-radius: var(--r-panel); background: var(--button); color: var(--ink); font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.4); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
