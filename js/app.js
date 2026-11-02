@@ -1099,6 +1099,7 @@ function drawMode()
     pen = { kind, slots, size, opacity: 1, color: from[Math.floor(Math.random() * from.length)] || PALETTE[0] };
     pick(null, v);
     corner();
+    setState(state);   // (the save button shown as drawing has it)
 }
 function endDrawing(v)
 {
@@ -1106,6 +1107,7 @@ function endDrawing(v)
     if (v) tools(v);
     corner();
     redrawViewers();
+    if (project) setState(state);
     if (project && project.steps.length) { clearTimeout(saveTimer); save(); }
 }
 // The drawing strokes go on from now (null: a new one, made with the next stroke), kept for next time.
@@ -1222,13 +1224,10 @@ function popFrom(btn, html, wire)
 function slotPop(v, b)
 {
     const sl = SLOTS.find(x => x.id === b.dataset.slot);
-    // (the brushes: with how smooth their strokes are, as Board's Drawing Bar has it in its menu)
-    const smooth = () => '<div class="psmooth"><span>Smoothing</span><div class="seg">' + SMOOTHINGS.map(([name, val]) => '<button class="' + (smoothing() === val ? "on" : "") + '" data-smooth="' + val + '">' + name + "</button>").join("") + "</div></div>";
-    popFrom(b, '<div class="choices">' + sl.tools.map(t => '<button class="glyph' + (pen.slots[sl.id] === t[0] ? " on" : "") + '" data-tool="' + t[0] + '" aria-label="' + t[2] + '" title="' + t[2] + '">' + icon(t[1], 20) + "</button>").join("") + "</div>" + (sl.id === "brush" ? smooth() : ""),
+    popFrom(b, '<div class="choices">' + sl.tools.map(t => '<button class="glyph' + (pen.slots[sl.id] === t[0] ? " on" : "") + '" data-tool="' + t[0] + '" aria-label="' + t[2] + '" title="' + t[2] + '">' + icon(t[1], 20) + "</button>").join("") + "</div>",
         card =>
         {
             card.querySelectorAll("[data-tool]").forEach(x => x.addEventListener("click", () => { closePop(); useTool(x.dataset.tool, v); }));
-            card.querySelectorAll("[data-smooth]").forEach(x => x.addEventListener("click", () => { remember("canopy.smoothing", +x.dataset.smooth); card.querySelectorAll("[data-smooth]").forEach(y => y.classList.toggle("on", y === x)); }));
         });
 }
 // The brush and its color, as Board's Quick Color has them: its size and how opaque, the color (a field of its
@@ -1305,8 +1304,6 @@ function inkPop(v, b)
     });
 }
 // How much a stroke is eased toward the finger (Board's Smoothing, and its four steps), as this phone last had it.
-const SMOOTHINGS = [["Off", 0], ["Low", 0.2], ["Medium", 0.35], ["High", 0.6]];
-function smoothing() { const v = remembered("canopy.smoothing", 0.35); return SMOOTHINGS.some(o => o[1] === v) ? v : 0.35; }
 // The size slider's mark: a dot as big as the brush, within its place (4 to 22 across).
 function markOf(size) { return Math.round(4 + 18 * sizeAt(size)); }
 // The size slider: even steps for the small sizes, bigger ones as it goes (0 to 1, to a size on the screen).
@@ -1384,7 +1381,7 @@ function strokeFrom(v, at, e)
     // a finger's wobble. The eased points are then joined by a smooth curve through them (Catmull-Rom), points put
     // along it a short way apart, so a quick sweep is as round as a slow one; the last stretch, still to come right as
     // the next point decides its bend, is drawn each time but kept only once the next point comes (or the finger lifts).
-    const lag = smoothing() * 0.9, gap = 2.5;   // (gap: between the points put along the curve, on the screen)
+    const lag = 0.54, gap = 2.5;   // (gap: between the points put along the curve, on the screen)
     let ex = null, ey = null, ep = 1, lx = null, ly = null, rawX = null, rawY = null, rawP = 1;
     const eased = [];   // the eased points, on the screen: x, y, pressure each
     const ease = (p, ev) =>
@@ -2335,9 +2332,11 @@ function statusHtml()
     if (project.local) return '<button class="icon status" data-do="copy" aria-label="Save a copy" title="Save a copy">' + icon("download") + "</button>";
     // A round mark: a tick once saved (lit as a save lands), a still ring while changes wait to be saved, turning only
     // while a save is under way, a warning while it can't be.
-    const words = { saved: "Saved", pending: "Changes to save", saving: "Saving", waiting: "Not saved yet" + (stateWhy ? ": " + stateWhy : ""), updated: "Updated from Dropbox" }[state] || "";
-    const mark = state === "saving" || state === "pending" ? "saving" : state === "waiting" ? "waiting" : "saved";
-    return '<button class="icon status ' + state + (landed ? " landed" : "") + '" data-do="refresh" aria-label="' + text(words) + '" title="' + text(words) + '">' + icon(mark) + "</button>";   // (tapped: saved now, and checked for changes)
+    // While drawing, changes aren't saved as they come (only at Done): said so plainly, a lit button that saves them now.
+    const held = state === "pending" && !!pen;
+    const words = held ? "Not saved while drawing: tap to save" : { saved: "Saved", pending: "Changes to save", saving: "Saving", waiting: "Not saved yet" + (stateWhy ? ": " + stateWhy : ""), updated: "Updated from Dropbox" }[state] || "";
+    const mark = held ? "tosave" : state === "saving" || state === "pending" ? "saving" : state === "waiting" ? "waiting" : "saved";
+    return '<button class="icon status ' + state + (held ? " held" : "") + (landed ? " landed" : "") + '" data-do="refresh" aria-label="' + text(words) + '" title="' + text(words) + '">' + icon(mark) + "</button>";   // (tapped: saved now, and checked for changes)
 }
 let landed = false;   // a save just landed: the tick lit for a moment
 function setState(s, why)
