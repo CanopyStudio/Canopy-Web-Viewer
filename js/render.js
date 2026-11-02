@@ -560,18 +560,64 @@ function strokeInto(g, st)
         g.stroke();
         return;
     }
-    // Ink: piece by piece, each as wide as the pressure along it (so it swells and thins along the way), and each a
-    // curve from the middle of one gap to the middle of the next, bending at the point between (no corners).
-    const w = i => st.size * Math.max(0.1, p[i * 3 + 2]);
-    if (n === 1) { g.beginPath(); g.arc(p[0], p[1], w(0) / 2, 0, Math.PI * 2); g.fill(); return; }
-    if (n === 2) { g.lineWidth = (w(0) + w(1)) / 2; g.beginPath(); g.moveTo(x(0), y(0)); g.lineTo(x(1), y(1)); g.stroke(); return; }
-    for (let i = 1; i < n; i++)
+    inkPieces(g, st, p, 1, n);
+}
+// Ink: piece by piece, each as wide as the pressure along it (so it swells and thins along the way), and each a curve
+// from the middle of one gap to the middle of the next, bending at the point between (no corners); the last on to the
+// last point. Pieces "from" to "to" (the first, 1; one point alone: a dot).
+function inkPieces(g, st, p, from, to)
+{
+    const n = p.length / 3, x = i => p[i * 3], y = i => p[i * 3 + 1], w = i => st.size * Math.max(0.1, p[i * 3 + 2]);
+    if (n === 1) { if (from <= 1) { g.beginPath(); g.arc(p[0], p[1], w(0) / 2, 0, Math.PI * 2); g.fill(); } return; }
+    if (n === 2) { if (from <= 1) { g.lineWidth = (w(0) + w(1)) / 2; g.beginPath(); g.moveTo(x(0), y(0)); g.lineTo(x(1), y(1)); g.stroke(); } return; }
+    for (let i = Math.max(1, from); i < Math.min(to, n); i++)
     {
         const ax = i === 1 ? x(0) : (x(i - 2) + x(i - 1)) / 2, ay = i === 1 ? y(0) : (y(i - 2) + y(i - 1)) / 2;
         const last = i === n - 1, bx = last ? x(i) : (x(i - 1) + x(i)) / 2, by = last ? y(i) : (y(i - 1) + y(i)) / 2;
         g.lineWidth = i === 1 ? (w(0) + w(1)) / 2 : (w(i - 2) + w(i - 1) * 2 + w(i)) / 4;
         g.beginPath(); g.moveTo(ax, ay); g.quadraticCurveTo(x(i - 1), y(i - 1), bx, by); g.stroke();
     }
+}
+
+// The stroke being drawn, a little more each time: what of it is settled is kept on a canvas of its own ("wetLayer",
+// added to as the points come, never drawn again), and only its last piece (and any points guessed ahead) drawn fresh
+// each time; laid onto "g" (the drawing's canvas, in its pixels; "m" its transform) as the whole stroke would be.
+let wetLayer = null, wetMix = null;
+function drawWet(g, st, m)
+{
+    const cv = g.canvas, key = [st.sid, cv.width, cv.height, m.a, m.b, m.c, m.d, m.e, m.f].join();
+    if (!wetLayer) wetLayer = { canvas: document.createElement("canvas"), key: "", upto: 0, carry: 0 };
+    const L = wetLayer, wc = L.canvas;
+    if (L.key !== key)
+    {
+        if (wc.width !== cv.width || wc.height !== cv.height) { wc.width = cv.width; wc.height = cv.height; }
+        const c = wc.getContext("2d"); c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, wc.width, wc.height);
+        L.key = key; L.upto = 0; L.carry = 0;
+    }
+    const p = st.pts, all = p.length / 3, solid = all - (p.ahead || 0);
+    const paint = c => { c.setTransform(m); c.globalAlpha = 1; c.globalCompositeOperation = "source-over"; c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = c.fillStyle = st.kind === "erase" ? "#000" : st.color; };
+    const c = wc.getContext("2d");
+    paint(c);
+    if (st.kind === "flat")
+    {
+        if (solid > L.upto) { const path = new Path2D(); L.carry = flatStamps(path, st, L.upto, solid, L.carry); c.fill(path, "nonzero"); L.upto = solid; }
+    }
+    else if (solid >= 3 && solid - 1 > L.upto) { inkPieces(c, st, p.slice(0, (solid - 1) * 3 + 3), Math.max(1, L.upto), solid - 1); L.upto = solid - 1; }   // (settled: all but the last piece)
+    const alpha = st.opacity === undefined ? 1 : st.opacity, erase = st.kind === "erase";
+    let into = g;
+    if (alpha < 1 || erase)
+    {
+        if (!wetMix) wetMix = document.createElement("canvas");
+        if (wetMix.width !== cv.width || wetMix.height !== cv.height) { wetMix.width = cv.width; wetMix.height = cv.height; }
+        into = wetMix.getContext("2d");
+        into.setTransform(1, 0, 0, 1, 0, 0); into.globalAlpha = 1; into.globalCompositeOperation = "source-over"; into.clearRect(0, 0, cv.width, cv.height);
+    }
+    into.save(); into.setTransform(1, 0, 0, 1, 0, 0); into.globalAlpha = 1; into.globalCompositeOperation = "source-over"; into.drawImage(wc, 0, 0); into.restore();
+    into.save(); paint(into);
+    if (st.kind === "flat") { if (all > solid) { const path = new Path2D(); flatStamps(path, st, solid, all, L.carry); into.fill(path, "nonzero"); } }
+    else inkPieces(into, st, p, Math.max(1, L.upto), all);
+    into.restore();
+    if (into !== g) { g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = alpha; g.globalCompositeOperation = erase ? "destination-out" : "source-over"; g.drawImage(wetMix, 0, 0); g.restore(); }
 }
 
 // The Flat, as Board's Flat brush with no bristles: its tip (Board's TipShape.Flat: a rounded rectangle, its edge
@@ -583,7 +629,7 @@ let flatTip = null;   // its outline, across -0.5 to 0.5 of the tip's width and 
 function tipOutline()
 {
     if (flatTip) return flatTip;
-    const n = 160, { aspect, corner, lobes, depth, wobble } = FLAT;
+    const n = 96, { aspect, corner, lobes, depth, wobble } = FLAT;
     const a = 0.5, b = 0.5 * aspect, rc = Math.max(1e-4, corner * b), ex = a - rc, ey = b - rc, thick = 2 * b;
     const quarter = Math.PI / 2 * rc, len = 4 * ex + 4 * ey + 4 * quarter;
     let seed = FLAT.seed;
@@ -623,37 +669,37 @@ function tipOutline()
     }
     return flatTip = pts;
 }
-const stamped = new WeakMap();   // a Flat stroke: { path, upto (its points stamped), carry (along since the last stamp), at }
-function flatInto(g, st)
+const stamped = new WeakMap();   // a Flat stroke: { path, upto (its points stamped), carry (along since the last stamp) }
+// The Flat's tip stamped into "path" a small share of its width apart, along points "from" to "to" (carrying on "c"
+// along from the last stamp): what is left over.
+function flatStamps(path, st, from, to, c)
 {
-    const p = st.pts, solid = p.length / 3 - (p.ahead || 0), tip = tipOutline();
-    const width = i => st.size * Math.max(0.35, p[i * 3 + 2]);
-    const stamp = (path, x, y, w) =>
+    const p = st.pts, tip = tipOutline(), width = i => st.size * Math.max(0.35, p[i * 3 + 2]);
+    const stamp = (x, y, w) =>
     {
         const h = w * FLAT.aspect;
         path.moveTo(x + tip[0] * w, y + tip[1] * h);
         for (let k = 2; k < tip.length; k += 2) path.lineTo(x + tip[k] * w, y + tip[k + 1] * h);
         path.closePath();
     };
-    // Stamps a small share of the tip's width apart, from point "from" on (carrying on from "c"): what is left over.
-    const along = (path, from, to, c) =>
+    for (let i = from; i < to; i++)
     {
-        for (let i = from; i < to; i++)
-        {
-            if (i === 0) { stamp(path, p[0], p[1], width(0)); continue; }
-            const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], x1 = p[i * 3], y1 = p[i * 3 + 1], d = Math.hypot(x1 - x0, y1 - y0);
-            const w0 = width(i - 1), w1 = width(i), step = Math.max(0.4, Math.min(w0, w1) * 0.04);
-            let t = step - c;
-            while (t <= d) { const u = d ? t / d : 1; stamp(path, x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, w0 + (w1 - w0) * u); t += step; }
-            c = d - (t - step);
-        }
-        return c;
-    };
+        if (i === 0) { stamp(p[0], p[1], width(0)); continue; }
+        const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], x1 = p[i * 3], y1 = p[i * 3 + 1], d = Math.hypot(x1 - x0, y1 - y0);
+        const w0 = width(i - 1), w1 = width(i), step = Math.max(0.5, Math.min(w0, w1) * 0.06);
+        let t = step - c;
+        while (t <= d) { const u = d ? t / d : 1; stamp(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, w0 + (w1 - w0) * u); t += step; }
+        c = d - (t - step);
+    }
+    return c;
+}
+function flatInto(g, st)
+{
+    const n = st.pts.length / 3;
     let kept = stamped.get(st);
-    if (!kept || kept.upto > solid || kept.size !== st.size) { kept = { path: new Path2D(), upto: 0, carry: 0, size: st.size }; stamped.set(st, kept); }
-    if (solid > kept.upto) { kept.carry = along(kept.path, kept.upto, solid, kept.carry); kept.upto = solid; }
+    if (!kept || kept.upto > n || kept.size !== st.size) { kept = { path: new Path2D(), upto: 0, carry: 0, size: st.size }; stamped.set(st, kept); }
+    if (n > kept.upto) { kept.carry = flatStamps(kept.path, st, kept.upto, n, kept.carry); kept.upto = n; }
     g.fill(kept.path, "nonzero");
-    if (p.length / 3 > solid) { const ahead = new Path2D(); along(ahead, solid, p.length / 3, kept.carry); g.fill(ahead, "nonzero"); }   // (points guessed ahead: this time only)
 }
 // A fill (a picture of what it filled, made when it was tapped), a selection rubbed out ("clear"), or one moved ("move":
 // the paint inside its outline taken out and put back "dx", "dy" along): drawn onto what the drawing has so far.
@@ -1002,8 +1048,8 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
                     dry.key = key;
                 }
                 g.drawImage(dry.canvas, 0, 0);
-                g.setTransform(m);
-                drawStrokes(g, [wet]);
+                if (wet.kind === "pen" || wet.kind === "flat" || wet.kind === "erase") drawWet(g, wet, m);
+                else { g.setTransform(m); drawStrokes(g, [wet]); }
             }
             else { g.setTransform(m); drawingInto(g, o, b, doc, get, strokes.length); }
             ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();

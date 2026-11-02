@@ -12,8 +12,7 @@ export class Viewer
         this.canvas = document.createElement("canvas");
         this.canvas.className = "viewer";
         host.appendChild(this.canvas);
-        // (drawn straight to the screen where the browser can, skipping a frame's wait: strokes follow the finger closer)
-        this.ctx = this.canvas.getContext("2d", { desynchronized: true }) || this.canvas.getContext("2d");
+        this.ctx = this.canvas.getContext("2d");
         this.cam = { s: 1, tx: 0, ty: 0 };
         this.pointers = new Map();
         this.lastTap = 0;

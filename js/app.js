@@ -1565,7 +1565,7 @@ async function paintTiles(frame, draw)
 {
     const T = cnpy.TILE, tiles = new Map();
     const c0 = Math.floor(frame.x / T), r0 = Math.floor(frame.y / T), c1 = Math.floor((frame.x + frame.w - 1) / T), r1 = Math.floor((frame.y + frame.h - 1) / T);
-    const whole = (c1 - c0 + 1) * (r1 - r0 + 1) * T * T <= 36e6;
+    const whole = (c1 - c0 + 1) * (r1 - r0 + 1) * T * T <= 16e6;   // (a phone's browser makes no bigger canvas: Safari's limit)
     let all = null, ag = null;
     if (whole)
     {
@@ -2299,7 +2299,9 @@ function changed()
     if (project.local) return;
     if (state !== "saving") setState("pending");
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(save, pen ? 20000 : 900);   // (drawing: saved once it pauses a while, or Done; each time Draw is begun, one drawing)
+    // (drawing: saved at Done, not while drawing goes on: a save writes the whole project again, which on a phone
+    // can hold everything up; the strokes are kept on the phone meanwhile)
+    if (!pen) saveTimer = setTimeout(save, 900);
 }
 // The steps not yet saved, kept on this phone (in case the page is closed first): written once things pause, not after
 // every stroke (a long run of strokes is a lot to write), and at once when the page is put away.
@@ -2344,7 +2346,7 @@ async function save()
         forgetPhotos(p);
         problem = "";
         setState(project.steps.length ? "pending" : "saved");
-        if (project.steps.length) saveTimer = setTimeout(save, 400);
+        if (project.steps.length && !pen) saveTimer = setTimeout(save, 400);
         if (!editing && !sheetOpen()) show(); else { redrawViewers(); if (sheetOpen()) redrawEntries(); }
     }
     catch (e)
