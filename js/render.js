@@ -746,6 +746,35 @@ function drawEdit(g, st)
 }
 let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then laid on the view)
 let dry = null;            // the drawing a stroke is being drawn on, without that stroke: { canvas, key (what it was drawn as) }
+// A drawing with strokes not yet saved, kept drawn on a canvas of its own (in canvas units, as sharp as the view needs,
+// a power of two), so moving round the canvas or zooming lays it on rather than drawing every stroke again each time.
+// Made again when its strokes change, or when the view is still and needs it sharper; while the view moves, the one
+// there is used whatever its sharpness. False when it is too big to keep (then drawn as it is).
+const keptDrawings = new Map();   // by drawing: { canvas, key, k (its pixels to a canvas unit), x, y, w, h }
+function keptDrawing(ctx, o, b, doc, get, m)
+{
+    const r = o.reach || b, need = Math.hypot(m.a, m.b);
+    if (!(r.w > 0) || !(r.h > 0) || !(need > 0)) return false;
+    const strokes = o.strokes || [], key = [strokes.length, strokes.length ? strokes[strokes.length - 1].sid : "", (o.merged || []).length, r.x, r.y, r.w, r.h, stats.decoded].join();
+    const most = Math.min(4096 / Math.max(r.w, r.h), Math.sqrt(8e6 / (r.w * r.h)));
+    let k = Math.min(Math.pow(2, Math.ceil(Math.log2(need))), most);
+    let c = keptDrawings.get(o.id);
+    const moving = smooth === "low";
+    if (!c || c.key !== key || (!moving && c.k < Math.min(need, most) * 0.99))
+    {
+        if (k < need * 0.5 && !moving) return false;   // (too big to keep at the size it is shown: drawn as it is)
+        if (!c) { c = { canvas: document.createElement("canvas") }; keptDrawings.set(o.id, c); if (keptDrawings.size > 2) keptDrawings.delete(keptDrawings.keys().next().value); }
+        const W = Math.max(1, Math.ceil(r.w * k)), H = Math.max(1, Math.ceil(r.h * k));
+        c.canvas.width = W; c.canvas.height = H;
+        const d = c.canvas.getContext("2d");
+        d.setTransform(k, 0, 0, k, -r.x * k, -r.y * k);
+        drawingInto(d, o, b, doc, get, strokes.length);
+        Object.assign(c, { key, k, x: r.x, y: r.y, w: W / k, h: H / k });
+    }
+    ctx.imageSmoothingQuality = smooth;
+    ctx.drawImage(c.canvas, c.x, c.y, c.w, c.h);
+    return true;
+}
 // A drawing made here, or a saved one with what is drawn on it here: its pixels, any drawing merged into it, and its
 // first "upto" strokes (onto "g", set to canvas units).
 function drawingInto(g, o, b, doc, get, upto)
@@ -1051,6 +1080,7 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
                 if (wet.kind === "pen" || wet.kind === "flat" || wet.kind === "erase") drawWet(g, wet, m);
                 else { g.setTransform(m); drawStrokes(g, [wet]); }
             }
+            else if (!o.angle && !o.shear && !o.flipX && !o.flipY && keptDrawing(ctx, o, b, doc, get, m)) return;
             else { g.setTransform(m); drawingInto(g, o, b, doc, get, strokes.length); }
             ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
             return;
