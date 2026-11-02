@@ -174,7 +174,11 @@ export class Viewer
         Object.assign(this.glCanvas.style, { display: "", width: this.w + "px", height: this.h + "px" });
         const ctx = this.ctx;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        this.painter.show(on.o, render.box(on.o, ctx), sc.doc, this.get, this.cam, this.dpr, this.w, this.h, this.wet && this.wet.stroke, render.fade(sc.doc, on.o), fast);
+        // (the stroke's points still to come right, and any guessed, on it for this frame only)
+        const pts = this.wet && this.wet.pts, n = pts ? pts.length : 0;
+        if (n && this.wet.ahead && this.wet.ahead.length) { pts.push(...this.wet.ahead); pts.ahead = this.wet.ahead.length / 3; }
+        try { this.painter.show(on.o, render.box(on.o, ctx), sc.doc, this.get, this.cam, this.dpr, this.w, this.h, this.wet && this.wet.stroke, render.fade(sc.doc, on.o), fast); }
+        finally { if (n) { pts.length = n; pts.ahead = 0; } }
     }
 
     // A stroke under way ("wet": the drawing it is on, and any points guessed ahead of the finger): what is under that

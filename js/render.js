@@ -93,7 +93,7 @@ export function forget(c) { if (!c) return; for (const e of c.seen.values()) { i
 export function pictures(doc, added, redraw, c)
 {
     c = c || cache();
-    const bytesOf = file => added && added.has(file) ? Promise.resolve(added.get(file)) : doc.zip.file(file) ? doc.zip.file(file).async("uint8array") : null;
+    const bytesOf = file => added && added.has(file) ? Promise.resolve(added.get(file)) : extraBytes.has(file) ? Promise.resolve(extraBytes.get(file)) : doc.zip.file(file) ? doc.zip.file(file).async("uint8array") : null;
     const next = () =>
     {
         while (c.busy < 2 && c.queue.length)
@@ -314,8 +314,13 @@ function sizeOf(b)
     }
     return null;
 }
+// Drawings' pixels not in the file (a drawing as it was before a save, kept to undo past it): their tiles by folder,
+// and the tiles' bytes by file, for tilesOf and the pictures to find.
+const extraTiles = new Map(), extraBytes = new Map();
+export function keepSnap(snap) { if (!extraTiles.has(snap.file)) { extraTiles.set(snap.file, snap.tiles); for (const [f, b] of snap.files) extraBytes.set(f, b); } }
 export function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row) and file names
 {
+    if (extraTiles.has(folder)) return extraTiles.get(folder);
     if (!doc._tiles) doc._tiles = new Map();
     if (doc._tiles.has(folder)) return doc._tiles.get(folder);
     const out = [];
@@ -346,6 +351,13 @@ export function scene(doc, view)
         if (lay) q = { ...q, ...regrouped(doc, o, lay) };
         return q;
     };
+    // (a drawing as it was before a save: its pixels then, where they were)
+    for (const [id, snap] of view.unsaved || [])
+    {
+        keepSnap(snap);
+        const o = byId.get(id);
+        if (o) byId.set(id, { ...o, file: snap.file, frame: snap.frame, x: snap.box.x, y: snap.box.y, w: snap.box.w, h: snap.box.h });
+    }
     const items = order(doc, view).map(id => byId.get(id)).filter(o => o && !view.deleted.has(o.id) && !view.removed.has(o.id)).map(own);
     for (const l of view.lists) if (l.fresh) items.push(l);
     for (const r of view.restored) items.push(r.by ? placed(r.item, r.by) : r.item);
@@ -763,7 +775,7 @@ function keptDrawing(ctx, o, b, doc, get, m, upto)
     const moving = smooth === "low";
     let c = keptDrawings.get(o.id);
     const inside = st => { const e = sketchItem({ strokes: [st] }); return e.x >= c.x && e.y >= c.y && e.x + e.w <= c.x + c.w && e.y + e.h <= c.y + c.h; };
-    const same = c && c.merged === merged && c.loaded === loaded && c.n <= strokes.length && (c.n === 0 || (strokes[c.n - 1] && strokes[c.n - 1].sid === c.last)) && strokes.slice(c.n).every(inside);
+    const same = c && c.file === o.file && c.merged === merged && c.loaded === loaded && c.n <= strokes.length && (c.n === 0 || (strokes[c.n - 1] && strokeKey(strokes[c.n - 1]) === c.last)) && strokes.slice(c.n).every(inside);
     const sharp = c && (moving || c.k >= Math.min(need, c.most) * 0.99);
     if (!same || !sharp)
     {
@@ -777,7 +789,7 @@ function keptDrawing(ctx, o, b, doc, get, m, upto)
         const d = c.canvas.getContext("2d");
         d.setTransform(k, 0, 0, k, -r.x * k, -r.y * k);
         drawingInto(d, o, b, doc, get, strokes.length);
-        Object.assign(c, { k, most, x: r.x, y: r.y, w: W / k, h: H / k, n: strokes.length, merged, loaded });
+        Object.assign(c, { k, most, file: o.file, x: r.x, y: r.y, w: W / k, h: H / k, n: strokes.length, merged, loaded });
     }
     else if (c.n < strokes.length)
     {
@@ -786,11 +798,14 @@ function keptDrawing(ctx, o, b, doc, get, m, upto)
         drawStrokes(d, strokes.slice(c.n));   // (only the new ones)
         c.n = strokes.length;
     }
-    c.last = strokes.length ? strokes[strokes.length - 1].sid : "";
+    c.last = strokes.length ? strokeKey(strokes[strokes.length - 1]) : "";
     ctx.imageSmoothingQuality = "low";   // (near its own size: the quick way is as good)
     ctx.drawImage(c.canvas, c.x, c.y, c.w, c.h);
     return true;
 }
+// A stroke as it is now: its id, and what can still change while it is under way (a selection being moved: how far;
+// its points, as they come), so one kept drawn is drawn again once it has changed.
+export function strokeKey(st) { return st.sid + ":" + (st.dx || 0) + "," + (st.dy || 0) + ":" + (st.pts ? st.pts.length : 0); }
 // How many of a drawing's tiles (and those of any merged into it) have been read so far: a drawing kept before they
 // all were is made again as more come.
 function tilesLoaded(o, doc, get)

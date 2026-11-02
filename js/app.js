@@ -1092,8 +1092,11 @@ function drawMode()
     const slots = { pick: "select", brush: "pen", rub: "erase" };
     for (const k in was.slots || {}) if (TOOL_OF[was.slots[k]] && TOOL_OF[was.slots[k]].slot === k) slots[k] = was.slots[k];   // (one no longer on the bar, the Marker: the first)
     const kind = TOOL_OF[was.kind] && was.kind !== "dropper" ? was.kind : "pen";
-    const size = was.size >= SIZE.least && was.size <= SIZE.most ? was.size : SIZE.start, opacity = was.opacity > 0 && was.opacity <= 1 ? was.opacity : 1;
-    pen = { kind, slots, size, opacity, color: was.color || (project.base.doc.recent || [])[0] || PALETTE[0] };
+    // (each time drawing begins: fully opaque, and a color of the palette's picked at random, grays left out)
+    const size = was.size >= SIZE.least && was.size <= SIZE.most ? was.size : SIZE.start;
+    const pal = remembered("canopy.palette", null) || PALETTE, bright = pal.filter(c => toHsv(c)[1] >= 25 && toHsv(c)[2] >= 25);
+    const from = bright.length ? bright : pal;
+    pen = { kind, slots, size, opacity: 1, color: from[Math.floor(Math.random() * from.length)] || PALETTE[0] };
     pick(null, v);
     corner();
 }
@@ -1219,8 +1222,14 @@ function popFrom(btn, html, wire)
 function slotPop(v, b)
 {
     const sl = SLOTS.find(x => x.id === b.dataset.slot);
-    popFrom(b, '<div class="choices">' + sl.tools.map(t => '<button class="glyph' + (pen.slots[sl.id] === t[0] ? " on" : "") + '" data-tool="' + t[0] + '" aria-label="' + t[2] + '" title="' + t[2] + '">' + icon(t[1], 20) + "</button>").join("") + "</div>",
-        card => card.querySelectorAll("[data-tool]").forEach(x => x.addEventListener("click", () => { closePop(); useTool(x.dataset.tool, v); })));
+    // (the brushes: with how smooth their strokes are, as Board's Drawing Bar has it in its menu)
+    const smooth = () => '<div class="psmooth"><span>Smoothing</span><div class="seg">' + SMOOTHINGS.map(([name, val]) => '<button class="' + (smoothing() === val ? "on" : "") + '" data-smooth="' + val + '">' + name + "</button>").join("") + "</div></div>";
+    popFrom(b, '<div class="choices">' + sl.tools.map(t => '<button class="glyph' + (pen.slots[sl.id] === t[0] ? " on" : "") + '" data-tool="' + t[0] + '" aria-label="' + t[2] + '" title="' + t[2] + '">' + icon(t[1], 20) + "</button>").join("") + "</div>" + (sl.id === "brush" ? smooth() : ""),
+        card =>
+        {
+            card.querySelectorAll("[data-tool]").forEach(x => x.addEventListener("click", () => { closePop(); useTool(x.dataset.tool, v); }));
+            card.querySelectorAll("[data-smooth]").forEach(x => x.addEventListener("click", () => { remember("canopy.smoothing", +x.dataset.smooth); card.querySelectorAll("[data-smooth]").forEach(y => y.classList.toggle("on", y === x)); }));
+        });
 }
 // The brush and its color, as Board's Quick Color has them: its size and how opaque, the color (a field of its
 // saturation and brightness, and hue, saturation and brightness to slide), and the palette, this phone's own to add to
@@ -1295,6 +1304,9 @@ function inkPop(v, b)
         show();
     });
 }
+// How much a stroke is eased toward the finger (Board's Smoothing, and its four steps), as this phone last had it.
+const SMOOTHINGS = [["Off", 0], ["Low", 0.2], ["Medium", 0.35], ["High", 0.6]];
+function smoothing() { const v = remembered("canopy.smoothing", 0.35); return SMOOTHINGS.some(o => o[1] === v) ? v : 0.35; }
 // The size slider's mark: a dot as big as the brush, within its place (4 to 22 across).
 function markOf(size) { return Math.round(4 + 18 * sizeAt(size)); }
 // The size slider: even steps for the small sizes, bigger ones as it goes (0 to 1, to a size on the screen).
@@ -1368,10 +1380,13 @@ function strokeFrom(v, at, e)
 {
     const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: pen.size, pts: [], ...(pen.opacity < 1 ? { opacity: pen.opacity } : {}) });
     const pts = s.stroke.pts;
-    // Each position eased toward, as Board's brush does at its Smoothing setting (0.35, its own to start with), which
-    // irons out a finger's wobble; the line is drawn as curves through the eased points (render.js, drawStrokes).
-    const lag = 0.35 * 0.9;
+    // Each position eased toward, as Board's brush does at its Smoothing setting (the brush popover's), which irons out
+    // a finger's wobble. The eased points are then joined by a smooth curve through them (Catmull-Rom), points put
+    // along it a short way apart, so a quick sweep is as round as a slow one; the last stretch, still to come right as
+    // the next point decides its bend, is drawn each time but kept only once the next point comes (or the finger lifts).
+    const lag = smoothing() * 0.9, gap = 2.5;   // (gap: between the points put along the curve, on the screen)
     let ex = null, ey = null, ep = 1, lx = null, ly = null, rawX = null, rawY = null, rawP = 1;
+    const eased = [];   // the eased points, on the screen: x, y, pressure each
     const ease = (p, ev) =>
     {
         const pressure = ev && ev.pointerType === "pen" ? Math.max(0.05, ev.pressure || 0.5) : 1;
@@ -1384,13 +1399,32 @@ function strokeFrom(v, at, e)
         const c = v.toCanvas(x, y);
         into.push(Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(pr * 100) / 100);
     };
+    // The curve from eased point i to i + 1 (its ends' neighbours bending it), points along it after its start.
+    const along = (i, into) =>
+    {
+        const q = k => { const j = Math.max(0, Math.min(eased.length / 3 - 1, k)) * 3; return [eased[j], eased[j + 1], eased[j + 2]]; };
+        const [x0, y0] = q(i - 1), [x1, y1, p1] = q(i), [x2, y2, p2] = q(i + 1), [x3, y3] = q(i + 2);
+        const steps = Math.max(1, Math.min(48, Math.ceil(Math.hypot(x2 - x1, y2 - y1) / gap)));
+        for (let k = 1; k <= steps; k++)
+        {
+            const t = k / steps, t2 = t * t, t3 = t2 * t;
+            const x = 0.5 * (2 * x1 + (-x0 + x2) * t + (2 * x0 - 5 * x1 + 4 * x2 - x3) * t2 + (-x0 + 3 * x1 - 3 * x2 + x3) * t3);
+            const y = 0.5 * (2 * y1 + (-y0 + y2) * t + (2 * y0 - 5 * y1 + 4 * y2 - y3) * t2 + (-y0 + 3 * y1 - 3 * y2 + y3) * t3);
+            keep(x, y, p1 + (p2 - p1) * t, into);
+        }
+    };
     const add = (p, ev) =>
     {
         rawX = p.x; rawY = p.y; rawP = ease(p, ev);
         if (lx !== null && Math.hypot(ex - lx, ey - ly) < 0.75) return;   // (closer than a pixel or so: no new point)
         lx = ex; ly = ey;
-        keep(ex, ey, ep, pts);
+        eased.push(ex, ey, ep);
+        const n = eased.length / 3;
+        if (n === 1) keep(ex, ey, ep, pts);
+        else if (n >= 3) along(n - 3, pts);   // (the stretch before the last: its bend now known)
     };
+    // The last stretch, as it would be now: drawn this time only.
+    const pending = () => { const out = [], n = eased.length / 3; if (n >= 2) along(n - 2, out); return out; };
     add(at, e);
     project.preview = s;
     refreshView();
@@ -1404,7 +1438,7 @@ function strokeFrom(v, at, e)
             if (evs.length) for (const one of evs) add(v.at(one), one); else add(now, ev);
             // Where the finger is guessed to be going next (where the browser can guess), eased on from here: drawn
             // this frame only, so the line keeps up with the finger.
-            wet.ahead = [];
+            wet.ahead = pending();
             const guess = ev && ev.getPredictedEvents ? ev.getPredictedEvents() : [];
             if (guess.length)
             {
@@ -1416,8 +1450,13 @@ function strokeFrom(v, at, e)
         },
         end()
         {
-            // The rest of the way to where the finger lifted (easing leaves the line a little behind it).
-            if (rawX !== null && pts.length > 3 && Math.hypot(rawX - ex, rawY - ey) >= 0.75) keep(rawX, rawY, rawP, pts);
+            // The rest of the way to where the finger lifted (easing leaves the line a little behind it), and the last
+            // stretch kept as it now is.
+            let more = false;
+            if (rawX !== null && eased.length > 3 && Math.hypot(rawX - ex, rawY - ey) >= 0.75) { eased.push(rawX, rawY, rawP); more = true; }
+            const n = eased.length / 3;
+            if (more && n >= 3) along(n - 3, pts);
+            if (n >= 2) along(n - 2, pts);
             v.wet = null; project.preview = null; step(s); mine = undos[undos.length - 1]; redrawViewers();
         },
         cancel() { v.wet = null; project.preview = null; refreshView(); v.redraw(); },
@@ -1591,7 +1630,7 @@ async function paintSketches(view, doc)
         if (tiles.size) out.push({ id: k.id, name: k.name, layer: k.layer, author: k.author, frame: { x: fx0, y: fy0, w: fx1 - fx0, h: fy1 - fy0 }, tiles });
     }
     // Saved drawings drawn on here, or with others merged into them: painted again.
-    const again = new Set((view.sketches || []).filter(k => k.base).map(k => k.base).concat((view.merges || []).map(m => m.into)));
+    const again = new Set((view.sketches || []).filter(k => k.base).map(k => k.base).concat((view.merges || []).map(m => m.into), [...(view.unsaved || new Map()).keys()]));
     for (const m of view.merges || []) again.delete(m.id);   // (one merged down goes with the one it went into)
     if (doc) for (const id of again) { const done = await repaint(doc, view, id); if (done) out.push(done); }
     return out;
@@ -1637,15 +1676,28 @@ async function paintTiles(frame, draw)
 async function repaint(doc, view, id)
 {
     const T = cnpy.TILE, own = x => view.moved.has(x.id) ? cnpy.placed(x, view.moved.get(x.id)) : x;
-    const o = doc.items.find(x => x.id === id);
-    if (!o || o.kind !== "paint" || view.removed.has(o.id)) return null;
+    const doc0 = doc.items.find(x => x.id === id);
+    if (!doc0 || doc0.kind !== "paint" || view.removed.has(doc0.id)) return null;
+    // (undone past its save: painted again from its pixels before it, kept with the steps, not the file's)
+    const snap = view.unsaved && view.unsaved.get(id), kept = new Map(snap ? snap.files : []);
+    if (snap) render.keepSnap(snap);
+    const o = snap ? { ...doc0, file: snap.file, frame: snap.frame, ...snap.box } : doc0;
+    if (snap && snap.isNew)
+    {
+        // A drawing made in that save: nothing of it before, only its strokes put back: its pixels as a new one's.
+        const k = (view.sketches || []).find(q => q.base === id);
+        if (!k || !k.strokes.length) return null;
+        const it = render.sketchItem(k), D = cnpy.DENSITY;
+        o.frame = { x: Math.floor(it.x * D), y: Math.floor(it.y * D), w: Math.max(1, Math.ceil(it.w * D)), h: Math.max(1, Math.ceil(it.h * D)) };
+        Object.assign(o, { x: o.frame.x / D, y: o.frame.y / D, w: o.frame.w / D, h: o.frame.h / D });
+    }
     const area = x =>
     {
         // Its pixels' rectangle (its frame; or, in an older file, what its tiles cover), and its box on the canvas.
         const tiles = render.tilesOf(doc, x.file);
         let a = x.frame && x.frame.w > 0 ? x.frame : null;
         if (!a && tiles.length) { const cs = tiles.map(t => t.c), rs = tiles.map(t => t.r); a = { x: Math.min(...cs) * T, y: Math.min(...rs) * T, w: (Math.max(...cs) - Math.min(...cs) + 1) * T, h: (Math.max(...rs) - Math.min(...rs) + 1) * T }; }
-        const b = own(x);
+        const b = x === o && snap ? (view.moved.has(x.id) ? cnpy.placed(x, view.moved.get(x.id)) : x) : own(x);
         return a && b.w > 0 && b.h > 0 ? { x, a, b, sx: b.w / a.w, sy: b.h / a.h, tiles } : null;
     };
     const me = area(o);
@@ -1669,7 +1721,7 @@ async function repaint(doc, view, id)
     let tiles;
     try
     {
-        for (const l of layers) { for (const t of l.tiles) if (!images.has(t.file)) images.set(t.file, await createImageBitmap(await doc.zip.file(t.file).async("blob"))); await render.fillsDecoded(l.strokes); }
+        for (const l of layers) { for (const t of l.tiles) if (!images.has(t.file)) images.set(t.file, await createImageBitmap(kept.has(t.file) ? new Blob([kept.get(t.file)]) : await doc.zip.file(t.file).async("blob"))); await render.fillsDecoded(l.strokes); }
         tiles = await paintTiles({ x: px0, y: py0, w: px1 - px0, h: py1 - py0 }, (g, ox, oy) =>
         {
             for (const l of layers)
@@ -1687,7 +1739,7 @@ async function repaint(doc, view, id)
     finally { for (const img of images.values()) img.close(); }
     const frame = { x: px0, y: py0, w: px1 - px0, h: py1 - py0 };
     const box = { x: me.b.x + (frame.x - me.a.x) * me.sx, y: me.b.y + (frame.y - me.a.y) * me.sy, w: frame.w * me.sx, h: frame.h * me.sy };
-    return { id: o.id, base: true, name: o.name, folder: o.id + "." + cnpy.newId().slice(0, 6) + "/", old: o.file, drop: layers.slice(1).map(l => l.x.file), frame, box, tiles };
+    return { id: o.id, base: true, name: o.name, folder: o.id + "." + cnpy.newId().slice(0, 6) + "/", old: doc0.file, drop: layers.slice(1).map(l => l.x.file), frame, box, tiles };
 }
 
 // ---- full screen: the canvas alone (the bars put away; the browser's too, where the phone lets a page), its two
@@ -1710,11 +1762,19 @@ function setFull(on)
     requestAnimationFrame(() => { if (canvasView) canvasView.resize(); });
 }
 // The screen kept on while the canvas is open (drawing, or looking it over, it would go dark), as far as the browser
-// lets a page; let go everywhere else, and asked for again when the page comes back.
-let wakeLock = null;
+// lets a page; let go everywhere else, and asked for again when the page comes back. Five minutes untouched, it is let
+// go too (the phone dims as it would), and asked for again at the next touch.
+const AWAKE_FOR = 5 * 60 * 1000;
+let wakeLock = null, touchedAt = Date.now(), idleTimer = 0;
+document.addEventListener("pointerdown", () =>
+{
+    touchedAt = Date.now();
+    clearTimeout(idleTimer); idleTimer = setTimeout(() => awake(), AWAKE_FOR + 50);
+    if (!wakeLock) awake();
+}, { capture: true, passive: true });
 async function awake()
 {
-    const want = !!project && tab === "canvas" && !document.hidden;
+    const want = !!project && tab === "canvas" && !document.hidden && Date.now() - touchedAt < AWAKE_FOR;
     if (!want) { if (wakeLock) { const w = wakeLock; wakeLock = null; try { await w.release(); } catch (e) { } } return; }
     if (wakeLock || !navigator.wakeLock) return;
     try { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } catch (e) { wakeLock = null; }
@@ -2323,7 +2383,8 @@ function undoRedo(redo)
     finishTyping(false, false);
     const from = redo ? redos : undos, to = redo ? undos : redos;
     if (!from.length) return;
-    const doing = from.pop();
+    let doing = from.pop();
+    if (doing.saved) doing = pastSave(doing);
     selectionWith(doing);
     const again = run(doing);
     if (!again.length)
@@ -2387,6 +2448,7 @@ async function save()
         {
             const n = p.steps.length;
             const upto = cnpy.apply(p.base.doc, p.steps.slice(0, n));
+            const before = await drawingsBefore(p.base.doc, upto);
             const bytes = await cnpy.save(p.base.doc, upto, p.pictures, await paintSketches(upto, p.base.doc));
             let rev = null;
             try { rev = await dbx.write(p.path, bytes, p.base.rev); }
@@ -2403,6 +2465,7 @@ async function save()
             if (off.has(p.path)) off.keep(p.path, bytes, rev).catch(() => { });
             p.steps = p.steps.slice(n);
             off.keepSteps(p.path, p.steps.slice());   // (at once, whichever project is open now: none of these done again)
+            if (p === project) undoPastSave(before);
             break;
         }
         retryIn = 8000;
@@ -2429,6 +2492,59 @@ async function save()
         saving = false;
         if (saveAgain) { saveAgain = false; if (project && project.steps.length && !pen) setTimeout(save, 0); }
     }
+}
+// ---- undoing past a save: each drawing saved kept as it was before (its pixels then, and the strokes the save painted
+// in), so the strokes can be undone one by one still: the drawing shown as it was, the strokes before the one undone put
+// back on it. For as long as the project is open; at most a few saves back, so the phone isn't filled ----
+
+const SAVED_MOST = { saves: 10, bytes: 50e6 };
+let savedBack = [];   // { D (the drawing), snap, sketch (its strokes' drawing: id, name, layer, author), strokes, bytes, gone }
+// What each drawing drawn on is before this save, from the file as it is (or as it was shown, if undone past one).
+async function drawingsBefore(doc, view)
+{
+    const out = [];
+    if (view.merges && view.merges.length) return out;   // (a drawing merged down saved: not undone past)
+    for (const k of view.sketches || [])
+    {
+        const D = k.base || k.id, tag = cnpy.newId();
+        let snap = view.unsaved && view.unsaved.get(D);
+        if (!snap && k.base)
+        {
+            const o = doc.items.find(x => x.id === D);
+            if (!o || o.kind !== "paint") continue;
+            const at = view.moved.has(D) ? cnpy.placed(o, view.moved.get(D)) : o, tiles = render.tilesOf(doc, o.file), files = [];
+            for (const t of tiles) { const f = doc.zip.file(t.file); if (f) files.push([t.file, await f.async("uint8array")]); }
+            snap = { tag, file: o.file, frame: o.frame, box: { x: at.x, y: at.y, w: at.w, h: at.h }, tiles, files };
+        }
+        if (!snap) snap = { tag, isNew: true, file: "\u0000none/", frame: null, box: { x: 0, y: 0, w: 0, h: 0 }, tiles: [], files: [] };   // (made in this save: nothing of it before)
+        out.push({ D, snap, sketch: { id: k.id, name: k.name, layer: k.layer, author: k.author }, strokes: k.strokes.slice(), bytes: snap.files.reduce((a, f) => a + f[1].byteLength, 0) });
+    }
+    return out;
+}
+// The save landed: its strokes' undoing turned into undoing past it (and doing them again, onto the saved drawing).
+function undoPastSave(before)
+{
+    for (const h of before)
+    {
+        savedBack.push(h);
+        const sids = new Set(h.strokes.map(st => st.sid));
+        for (let i = 0; i < undos.length; i++) { const e = undos[i]; if (e.length === 1 && e[0].t === "unstroke" && e[0].id === h.sketch.id && sids.has(e[0].sid)) undos[i] = { saved: h, sid: e[0].sid }; }
+        for (const e of redos) for (const x of e) if (x.t === "stroke" && x.id === h.sketch.id && !x.base) x.base = h.D;   // (a stroke undone before the save, done again: onto it, now saved)
+    }
+    // (the oldest let go past a few saves, or so much of the phone's memory)
+    let total = savedBack.reduce((a, h) => a + h.bytes, 0);
+    while (savedBack.length > SAVED_MOST.saves || total > SAVED_MOST.bytes) { const h = savedBack.shift(); h.gone = true; total -= h.bytes; }
+}
+// An undoing past a save, as the steps it takes now: just the stroke taken off, if the drawing shows as it was before
+// that save already; else the drawing shown as it was, and the strokes before this one put back.
+function pastSave(e)
+{
+    const h = e.saved;
+    if (h.gone) return [];
+    const now = project.view.unsaved && project.view.unsaved.get(h.D);
+    if (now && now.tag === h.snap.tag) return [{ t: "unstroke", list: null, id: h.sketch.id, sid: e.sid }];
+    const at = h.strokes.findIndex(st => st.sid === e.sid);
+    return [{ t: "unsave", list: null, id: h.D, snap: h.snap }].concat(h.strokes.slice(0, Math.max(0, at)).map(st => ({ t: "stroke", list: null, id: h.sketch.id, base: h.D, name: h.sketch.name, layer: h.sketch.layer, author: h.sketch.author, stroke: st })));
 }
 function sameBytes(a, b) { if (!a || !b || a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
 async function rebase(p, bytes, rev)
@@ -2585,7 +2701,7 @@ async function openPath(path)
         if (me !== opening) return;
         if (project) render.forget(project.cache);
         project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, pictures: new Map(), cache: render.cache() };
-        undos = []; redos = [];
+        undos = []; redos = []; savedBack = [];
         project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         await photosReady(project);
         refreshView();
@@ -2607,7 +2723,7 @@ async function openLocal(file)
         if (project) render.forget(project.cache);
         project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map(), cache: render.cache() };
         history.pushState({ at: (history.state && history.state.at || 0) + 1, project: file.name, local: true, open: null }, "");
-        undos = []; redos = [];
+        undos = []; redos = []; savedBack = [];
         project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         refreshView();
         open = null;

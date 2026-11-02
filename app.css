@@ -401,3 +401,9 @@ svg { display: block; }
 .qedit[hidden] { display: none; }
 .qbtn { flex: 1; height: 36px; border-radius: var(--r-control); background: var(--button); color: var(--ink); font-size: var(--text-main); }
 .qbtn:active { background: var(--chosen); }
+
+/* The brushes' popover: how smooth their strokes are (Board's Smoothing), one of four */
+.psmooth { display: flex; flex-direction: column; gap: 8px; padding: 10px 6px 4px; font-size: var(--text-small); color: var(--muted); }
+.seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-control); background: var(--chrome); }
+.seg button { flex: 1; height: 32px; padding: 0 10px; border-radius: var(--r-control); font-size: var(--text-main); color: var(--muted); }
+.seg button.on { background: var(--chosen); color: var(--heading); }

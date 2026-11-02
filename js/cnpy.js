@@ -442,6 +442,7 @@ export function apply(doc, steps)
     // The hierarchy's: objects shown or hidden, renamed, put above another (and into its layer), layers shown or hidden,
     // and drawings merged down (each into the one below, painted together as it is saved).
     const hides = new Map(), names = new Map(), zorder = [], layerHides = new Map(), merges = [], newLayers = [], droppedLayers = new Set();
+    const unsaved = new Map();   // drawings shown as they were before a save, by id: their pixels then ("snap"), a save's strokes undone past it
     const sketches = [];   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
     let order = null;   // the lists' order, once set here
     const items = new Map(doc.items.map(o => [o.id, o]));
@@ -453,8 +454,8 @@ export function apply(doc, steps)
         if (s.t === "stroke" || s.t === "unstroke")
         {
             // A stroke drawn here (into a drawing of its own, made with its first), or taken away again.
-            if (ids.has(s.id)) continue;   // (saved already)
             let k = sketches.find(o => o.id === s.id);
+            if (ids.has(s.id) && !s.base && !k) continue;   // (saved already; but strokes put back on a drawing, by undoing past its save, are on it)
             if (s.t === "stroke")
             {
                 if (!k) sketches.push(k = { id: s.id, base: s.base || null, name: s.name, layer: s.layer, author: s.author, strokes: [] });   // ("base": a saved drawing these go onto)
@@ -494,6 +495,10 @@ export function apply(doc, steps)
         if (s.t === "dellayer") { const k = newLayers.findIndex(l => l.id === s.id); if (k >= 0) newLayers.splice(k, 1); continue; }
         // A layer deleted, with what is in it ("ids", as it was then): one made here simply gone, one of the file's
         // taken out of it (its "folders" and "empty" lines).
+        // A drawing as it was before a save (undone past it, its strokes from then put back as steps of their own), or
+        // as it is in the file again.
+        if (s.t === "unsave") { unsaved.set(s.id, s.snap); continue; }
+        if (s.t === "ununsave") { unsaved.delete(s.id); continue; }
         if (s.t === "droplayer" || s.t === "undroplayer")
         {
             if (s.t === "undroplayer") { droppedLayers.delete(s.id); continue; }
@@ -540,7 +545,9 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, zorder, layerHides, merges, newLayers, droppedLayers };
+    // (a drawing made in a save, undone past it with none of its strokes back: not there)
+    for (const [id, snap] of unsaved) if (snap.isNew && !sketches.some(k => k.base === id && k.strokes.length)) removed.add(id);
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, zorder, layerHides, merges, newLayers, droppedLayers, unsaved };
 }
 
 // ---- the hierarchy's changes ----
@@ -698,6 +705,11 @@ export function inverse(doc, view, s)
             return [l ? { t: "newlayer", list: null, id: l.id, name: l.name, below: l.below } : { t: "undroplayer", list: null, id: s.id }].concat(things.length ? [{ t: "restore", list: null, things }] : []);
         }
         case "undroplayer": return [{ t: "droplayer", list: null, id: s.id, ids: [] }];
+        case "unsave": case "ununsave":
+        {
+            const was = view.unsaved && view.unsaved.get(s.id);
+            return was ? [{ t: "unsave", list: null, id: s.id, snap: was }] : s.t === "unsave" ? [{ t: "ununsave", list: null, id: s.id }] : [];
+        }
         case "hidelayer": return [{ t: "hidelayer", list: null, id: s.id, on: hiddenLayers(doc, view).has(s.id) }];
         case "merge": return [{ t: "unmerge", list: null, id: s.id }];
         case "unmerge": { const m = (view.merges || []).find(x => x.id === s.id); return m ? [{ t: "merge", list: null, id: m.id, into: m.into }] : []; }

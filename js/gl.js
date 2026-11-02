@@ -321,13 +321,13 @@ export function painter(canvas)
         const loaded = o.kind === "paint" ? render.tilesOf(doc, o.file).filter(t => get(t.file)).length : 0;
         const fills = strokes.filter(st => st.kind === "fill" && render.fillImage(st).complete).length;
         const inside = st => { const e = strokeBox(st); return e.x >= L.x && e.y >= L.y && e.x + e.w <= L.x + L.t.w / L.k && e.y + e.h <= L.y + L.t.h / L.k; };
-        const same = L && L.id === o.id && L.loaded === loaded && L.fills === fills && L.n <= strokes.length && (L.n === 0 || (strokes[L.n - 1] && strokes[L.n - 1].sid === L.last)) && strokes.slice(L.n).every(inside);
+        const same = L && L.id === o.id && L.file === o.file && L.loaded === loaded && L.fills === fills && L.n <= strokes.length && (L.n === 0 || (strokes[L.n - 1] && render.strokeKey(strokes[L.n - 1]) === L.last)) && strokes.slice(L.n).every(inside);
         const seen = L && L.part ? view.x >= L.x && view.y >= L.y && view.x + view.w <= L.x + L.t.w / L.k && view.y + view.h <= L.y + L.t.h / L.k : true;
         const sharp = L && (moving || (L.k >= Math.min(need, L.most) * 0.99 && L.k <= need * 2.5));
         if (same && sharp && seen)
         {
             for (let i = L.n; i < strokes.length; i++) paintStroke(strokes[i]);
-            L.n = strokes.length; L.last = strokes.length ? strokes[strokes.length - 1].sid : "";
+            L.n = strokes.length; L.last = strokes.length ? render.strokeKey(strokes[strokes.length - 1]) : "";
             return;
         }
         // Made anew: over all it reaches and some room (strokes made next fit on it too) where that fits on the chip
@@ -345,7 +345,7 @@ export function painter(canvas)
         const k = Math.min(cap, need * 1.25);
         const W = Math.max(1, Math.min(most, Math.ceil(r.w * k))), H = Math.max(1, Math.min(most, Math.ceil(r.h * k)));
         if (!L || L.t.w !== W || L.t.h !== H) { if (L) drop(L.t); L = { t: target(W, H) }; }
-        Object.assign(L, { id: o.id, x: r.x, y: r.y, k, most: cap, part, loaded, fills });
+        Object.assign(L, { id: o.id, file: o.file, x: r.x, y: r.y, k, most: cap, part, loaded, fills });
         into(L.t, W, H); clear();
         if (o.kind === "paint")
         {
@@ -362,7 +362,7 @@ export function painter(canvas)
             }
         }
         for (const st of strokes) paintStroke(st);
-        L.n = strokes.length; L.last = strokes.length ? strokes[strokes.length - 1].sid : "";
+        L.n = strokes.length; L.last = strokes.length ? render.strokeKey(strokes[strokes.length - 1]) : "";
     }
 
     // ---- the stroke under way, on the view's pixels ----
@@ -373,19 +373,21 @@ export function painter(canvas)
         if (!wet || wet.w !== w || wet.h !== h) { drop(wet); drop(tail); wet = target(w, h); tail = target(w, h); going = null; }
         const key = map.join();
         if (!going || going.sid !== st.sid || going.key !== key) { into(wet, w, h); clear(); going = { sid: st.sid, key, upto: 0, carry: 0 }; }
-        const p = st.pts, all = p.length / 3 - (p.ahead || 0), color = st.kind === "erase" ? "#000000" : st.color, px = 1 / map[0];
-        // (settled: points stamped, or all but the last piece, kept; the last piece drawn afresh each time)
+        // (settled: its points but those still to come right ("ahead": the last stretch, and any guessed), kept; the
+        // rest drawn afresh each time)
+        const p = st.pts, n = p.length / 3, all = n - (p.ahead || 0), color = st.kind === "erase" ? "#000000" : st.color, px = 1 / map[0];
         into(wet, w, h);
         if (st.kind === "flat")
         {
             if (all > going.upto) { const list = []; going.carry = flatShapes(st, going.upto, all, going.carry, list); drawShapes(list, color, map, w, h, true); going.upto = all; }
             into(tail, w, h); clear();
+            if (n > all) { const list = []; flatShapes(st, all, n, going.carry, list); drawShapes(list, color, map, w, h, true); }
         }
         else
         {
             if (all >= 3 && all - 1 > going.upto) { const list = []; inkShapes(st, p, Math.max(1, going.upto), all - 1, px, list, all); drawShapes(list, color, map, w, h, false); going.upto = all - 1; }
             into(tail, w, h); clear();
-            const list = []; inkShapes(st, p, Math.max(1, going.upto), all, px, list, all); drawShapes(list, color, map, w, h, false);
+            const list = []; inkShapes(st, p, Math.max(1, going.upto), n, px, list, n); drawShapes(list, color, map, w, h, false);
         }
     }
 
