@@ -143,7 +143,8 @@ export class Viewer
     down(e)
     {
         // (laid out at another size than it was drawn at, by a turn it missed: made right before the touch counts)
-        if (Math.abs(this.host.clientWidth - this.w) > 1 || Math.abs(this.host.clientHeight - this.h) > 1) this.fitCanvas();
+        const r = this.canvas.getBoundingClientRect();
+        if (Math.abs(this.host.clientWidth - this.w) > 1 || Math.abs(this.host.clientHeight - this.h) > 1 || Math.abs(r.width - this.w) > 1 || Math.abs(r.height - this.h) > 1 || Math.min(3, window.devicePixelRatio || 1) !== this.dpr) this.fitCanvas();
         // The first finger of a new touch: any still held from before are fingers whose lifting never came (the phone
         // turned mid-stroke, say). Left, this finger made a pinch with one that isn't there, and nothing drew again.
         if (e.isPrimary && this.pointers.size > 0)
@@ -191,21 +192,42 @@ export class Viewer
         const p = this.pointers.get(e.pointerId);
         this.pointers.delete(e.pointerId);
         if (this.pointers.size < 2) this.pinch = null;
-        if (this.held && this.pointers.size === 0) { const h = this.held; this.held = null; h.end(); if (this.moved > 10) return; }
-        if (this.pointers.size > 0 || this.moved > 10 || performance.now() - this.downAt > 400) return;
         const now = performance.now();
+        if (this.held && this.pointers.size === 0 && !this.held.dab) { const h = this.held; this.held = null; h.end(); if (this.moved > 10) return; }
+        else if (this.held && this.pointers.size === 0)
+        {
+            const h = this.held;
+            this.held = null;
+            // A stroke: a quick dab just after another, close by, is a double tap, to zoom; neither leaves paint.
+            const quick = this.moved <= 6 && now - this.downAt < 250, dab = this.lastDab;
+            if (quick && dab && now - dab.at < 320 && Math.hypot(p.x - dab.p.x, p.y - dab.p.y) < 32)
+            {
+                this.lastDab = null;
+                h.cancel();
+                if (dab.undo) dab.undo();
+                return this.zoomTap(p);
+            }
+            h.end();
+            this.lastDab = quick ? { at: now, p, undo: h.undo } : null;
+            return;
+        }
+        if (this.pointers.size > 0 || this.moved > 10 || now - this.downAt > 400) return;
         if (now - this.lastTap < 300)
         {
-            // A double tap: in closer there; already close, back out to everything.
             this.lastTap = 0;
             clearTimeout(this.tapTimer);
-            if (this.cam.s > 4 && this.onFitAll) return this.onFitAll();
-            const s = this.cam.s * 2.2, k = s / this.cam.s;
-            return this.glide({ s, tx: p.x - (p.x - this.cam.tx) * k, ty: p.y - (p.y - this.cam.ty) * k });
+            return this.zoomTap(p);
         }
         this.lastTap = now;
         const c = this.toCanvas(p.x, p.y);
         this.tapTimer = setTimeout(() => { if (this.onTap) this.onTap(c.x, c.y); }, 260);   // (not a double tap)
+    }
+    // A double tap: in closer there; already close, back out to everything.
+    zoomTap(p)
+    {
+        if (this.cam.s > 4 && this.onFitAll) return this.onFitAll();
+        const s = this.cam.s * 2.2, k = s / this.cam.s;
+        this.glide({ s, tx: p.x - (p.x - this.cam.tx) * k, ty: p.y - (p.y - this.cam.ty) * k });
     }
     wheel(e)
     {

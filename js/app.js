@@ -1042,12 +1042,14 @@ function paste(v)
 let pen = null;          // drawing: { kind: the tool in use, slots: the tool each of the bar's slots shows, size (on the screen), color }; null when not
 let sketchId = null;     // the strokes on a saved drawing since it was last saved: kept together under this id
 let paintSel = null;     // what is selected of the drawing being drawn on (Drawing Select): { pts: its outline, on the canvas }
-const SIZES = [3, 8, 16, 32];
-const INKS = ["#EAECEB", "#151616", "#E05A47", "#F2B53A", "#4FB477", "#3F8FD8", "#8E5BD6", "#E45FA8"];
-// The drawing bar's three slots, each holding a few tools: a tap uses the one it shows, a press and hold picks another.
+const SIZE = { least: 1, most: 80, start: 8 };   // the brush's size, on the screen
+// The palette to begin with (each phone keeps its own, changed as it likes): grays, then round the colors.
+const PALETTE = ["#151616", "#FFFFFF", "#7C807E", "#C9CCCA", "#E05A47", "#F28C38", "#F2C53A", "#4FB477", "#2FA3A0", "#3F8FD8", "#8E5BD6", "#E45FA8", "#8B5E3C", "#F1D7B0"];
+// The drawing bar's three slots, each holding a few tools: a tap uses the one it shows, a tap again (or a press and
+// hold) picks another.
 const SLOTS = [
     { id: "pick", tools: [["select", "select", "Select"], ["rect", "selrect", "Drawing Select (box)"], ["lasso", "sellasso", "Drawing Select (lasso)"]] },
-    { id: "brush", tools: [["pen", "pencil", "Pen"], ["marker", "marker", "Marker"], ["flat", "flat", "Flat"]] },
+    { id: "brush", tools: [["pen", "ink", "Ink"], ["flat", "flat", "Flat"]] },
     { id: "rub", tools: [["erase", "eraser", "Eraser"], ["fill", "fill", "Fill"], ["dropper", "dropper", "Eyedropper"]] }
 ];
 const TOOL_OF = Object.fromEntries(SLOTS.flatMap(sl => sl.tools.map(t => [t[0], { slot: sl.id, icon: t[1], name: t[2] }])));
@@ -1057,9 +1059,11 @@ function drawMode()
     if (!v || !project || project.base.doc.readOnly) return;
     if (pen) { endDrawing(v); return; }
     const was = remembered("canopy.pen", null) || {};
-    const slots = { pick: "select", brush: "pen", rub: "erase", ...(was.slots || {}) };
+    const slots = { pick: "select", brush: "pen", rub: "erase" };
+    for (const k in was.slots || {}) if (TOOL_OF[was.slots[k]] && TOOL_OF[was.slots[k]].slot === k) slots[k] = was.slots[k];   // (one no longer on the bar, the Marker: the first)
     const kind = TOOL_OF[was.kind] && was.kind !== "dropper" ? was.kind : "pen";
-    pen = { kind, slots, size: SIZES.includes(was.size) ? was.size : 8, color: was.color || (project.base.doc.recent || [])[0] || INKS[0] };
+    const size = was.size >= SIZE.least && was.size <= SIZE.most ? was.size : SIZE.start, opacity = was.opacity > 0 && was.opacity <= 1 ? was.opacity : 1;
+    pen = { kind, slots, size, opacity, color: was.color || (project.base.doc.recent || [])[0] || PALETTE[0] };
     pick(null, v);
     corner();
 }
@@ -1073,7 +1077,7 @@ function endDrawing(v)
 }
 // The drawing strokes go on from now (null: a new one, made with the next stroke), kept for next time.
 function drawOnto(id) { project.drawOn = id; sketchId = null; paintSel = null; remember("canopy.drawon." + project.path, id); }
-function keepPen() { remember("canopy.pen", { kind: pen.kind, slots: pen.slots, size: pen.size, color: pen.color }); }
+function keepPen() { remember("canopy.pen", { kind: pen.kind, slots: pen.slots, size: pen.size, opacity: pen.opacity, color: pen.color }); }
 function useTool(kind, v)
 {
     if (!TOOL_OF[kind]) return;
@@ -1089,14 +1093,15 @@ function drawBar(v, bar, host)
     const slot = sl =>
     {
         const k = pen.slots[sl.id], t = TOOL_OF[k], on = TOOL_OF[pen.kind].slot === sl.id;
-        return '<button class="glyph slot' + (on ? " on" : "") + '" data-slot="' + sl.id + '" aria-label="' + t.name + ' (hold for more)" title="' + t.name + '">' + icon(t.icon, 20) + '<i class="more"></i></button>';
+        return '<button class="glyph slot' + (on ? " on" : "") + '" data-slot="' + sl.id + '" aria-label="' + t.name + ' (tap again for more)" title="' + t.name + '">' + icon(t.icon, 20) + '<i class="more"></i></button>';
     };
     bar.innerHTML = SLOTS.map(slot).join("") + '<span class="sep"></span>'
-        + '<button class="glyph ink" data-act="ink" aria-label="Size and color" title="Size and color">' + dot(pen.size, pen.color) + "</button>"
+        + '<button class="glyph ink" data-act="ink" aria-label="Brush and color" title="Brush and color">' + dot(pen.size, pen.color, pen.opacity) + "</button>"
         + (paintSel ? '<button class="glyph" data-act="clear" aria-label="Delete what&#39;s selected" title="Delete what&#39;s selected">' + icon("trash", 20) + "</button>" : "")
         + '<button class="glyph" data-act="layers" aria-label="Hierarchy" title="Hierarchy">' + icon("layers", 20) + "</button>"
         + '<button class="done" data-act="done">Done</button>';
-    bar.querySelectorAll("[data-slot]").forEach(b => holdable(b, () => useTool(pen.slots[b.dataset.slot], v), () => slotPop(v, b)));
+    // (the slot in use, tapped again: its tools, as a held one shows them)
+    bar.querySelectorAll("[data-slot]").forEach(b => holdable(b, () => { if (TOOL_OF[pen.kind].slot === b.dataset.slot) slotPop(v, b); else useTool(pen.slots[b.dataset.slot], v); }, () => slotPop(v, b)));
     bar.querySelector('[data-act="ink"]').addEventListener("click", e => { const b = e.currentTarget; if (popOf === b) closePop(); else inkPop(v, b); });
     const clear = bar.querySelector('[data-act="clear"]');
     if (clear) clear.addEventListener("click", () => clearSelection(v));
@@ -1113,7 +1118,7 @@ function holdable(b, tap, hold)
     b.addEventListener("contextmenu", e => e.preventDefault());
     b.addEventListener("click", () => { if (held) { held = false; return; } if (popOf === b) { closePop(); return; } closePop(); tap(); });
 }
-function dot(size, color) { const d = Math.max(5, Math.min(24, size * 0.75)); return '<i style="width:' + d + "px;height:" + d + "px;background:" + color + '"></i>'; }
+function dot(size, color, opacity) { const d = Math.max(5, Math.min(24, 4 + size * 0.45)); return '<i style="width:' + d + "px;height:" + d + "px;background:" + color + (opacity < 1 ? ";opacity:" + opacity : "") + '"></i>'; }
 
 // ---- a popover from a button on the drawing bar: a card with a tab reaching down over its button, the two one shape
 // (as Board's Drawing Bar has them); the button under the tab shows it can be put away there ----
@@ -1128,29 +1133,42 @@ function popFrom(btn, html, wire)
     const el = element('<div class="pop"><svg class="shape"><path/></svg><div class="card">' + html + "</div></div>");
     frame.appendChild(el);
     const card = el.querySelector(".card");
-    const W = card.offsetWidth, body = card.offsetHeight, gap = 12, r = 8, f = 8, foot = 7, barTop = bar.getBoundingClientRect().top - fb.top;
-    const sw = bb.width + 4, sx = bb.left - fb.left - 2, stTop = bb.top - fb.top - 2, stBot = bb.bottom - fb.top + 2;
-    const room = fb.width - 8;
-    let L = sx + sw / 2 - W / 2;
-    L = Math.max(8, Math.min(L, room - W));
-    const top = barTop - gap - body;   // (clear of the bar, comfortably, as Board's are: only its tab reaches down)
-    const x = sx - L;
-    const flushL = x < r + f + 2, flushR = x + sw > W - r - f - 2;
-    if (flushL) L = sx; else if (flushR) L = sx + sw - W;
-    const X = sx - L, H = stBot - top;
-    let d = "M" + r + ",0.5 L" + (W - r) + ",0.5 A" + r + "," + r + " 0 0 1 " + (W - 0.5) + "," + r;
-    if (flushR) d += " L" + (W - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (W - foot) + "," + (H - 0.5);
-    else d += " L" + (W - 0.5) + "," + (body - r) + " A" + r + "," + r + " 0 0 1 " + (W - r) + "," + (body - 0.5) + " L" + (X + sw + f) + "," + (body - 0.5) + " A" + f + "," + f + " 0 0 0 " + (X + sw - 0.5) + "," + (body + f) + " L" + (X + sw - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (X + sw - foot) + "," + (H - 0.5);
-    if (flushL) d += " L" + foot + "," + (H - 0.5) + " A" + foot + "," + foot + " 0 0 1 0.5," + (H - foot);
-    else d += " L" + (X + foot) + "," + (H - 0.5) + " A" + foot + "," + foot + " 0 0 1 " + (X + 0.5) + "," + (H - foot) + " L" + (X + 0.5) + "," + (body + f) + " A" + f + "," + f + " 0 0 0 " + (X - f) + "," + (body - 0.5) + " L" + r + "," + (body - 0.5) + " A" + r + "," + r + " 0 0 1 0.5," + (body - r);
-    d += " L0.5," + r + " A" + r + "," + r + " 0 0 1 " + r + ",0.5 Z";
-    Object.assign(el.style, { left: L + "px", top: top + "px", width: W + "px", height: H + "px" });
-    const svg = el.querySelector("svg");
-    svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", "0 0 " + W + " " + H);
-    svg.querySelector("path").setAttribute("d", d);
+    // Its shape and place, from the card's size: again whenever what it shows changes size ("place").
     const arrow = element('<i class="down"></i>');
-    Object.assign(arrow.style, { left: X + sw / 2 - 5 + "px", top: H - (stBot - stTop) / 2 - 3 + "px" });
     el.appendChild(arrow);
+    const place = () =>
+    {
+        const scrolled = card.scrollTop;
+        card.style.maxHeight = ""; card.style.overflowY = "";
+        const gap = 12, r = 8, f = 8, foot = 7, barTop = bar.getBoundingClientRect().top - fb.top;
+        // (taller than the room above the bar, the phone on its side: as tall as there is room for, scrolled)
+        const room0 = barTop - gap - 8;
+        if (card.offsetHeight > room0) Object.assign(card.style, { maxHeight: Math.max(120, room0) + "px", overflowY: "auto" });
+        const W = card.offsetWidth, body = card.offsetHeight;
+        const sw = bb.width + 4, sx = bb.left - fb.left - 2, stTop = bb.top - fb.top - 2, stBot = bb.bottom - fb.top + 2;
+        const room = fb.width - 8;
+        let L = sx + sw / 2 - W / 2;
+        L = Math.max(8, Math.min(L, room - W));
+        const top = barTop - gap - body;   // (clear of the bar, comfortably, as Board's are: only its tab reaches down)
+        const x = sx - L;
+        const flushL = x < r + f + 2, flushR = x + sw > W - r - f - 2;
+        if (flushL) L = sx; else if (flushR) L = sx + sw - W;
+        const X = sx - L, H = stBot - top;
+        let d = "M" + r + ",0.5 L" + (W - r) + ",0.5 A" + r + "," + r + " 0 0 1 " + (W - 0.5) + "," + r;
+        if (flushR) d += " L" + (W - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (W - foot) + "," + (H - 0.5);
+        else d += " L" + (W - 0.5) + "," + (body - r) + " A" + r + "," + r + " 0 0 1 " + (W - r) + "," + (body - 0.5) + " L" + (X + sw + f) + "," + (body - 0.5) + " A" + f + "," + f + " 0 0 0 " + (X + sw - 0.5) + "," + (body + f) + " L" + (X + sw - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (X + sw - foot) + "," + (H - 0.5);
+        if (flushL) d += " L" + foot + "," + (H - 0.5) + " A" + foot + "," + foot + " 0 0 1 0.5," + (H - foot);
+        else d += " L" + (X + foot) + "," + (H - 0.5) + " A" + foot + "," + foot + " 0 0 1 " + (X + 0.5) + "," + (H - foot) + " L" + (X + 0.5) + "," + (body + f) + " A" + f + "," + f + " 0 0 0 " + (X - f) + "," + (body - 0.5) + " L" + r + "," + (body - 0.5) + " A" + r + "," + r + " 0 0 1 0.5," + (body - r);
+        d += " L0.5," + r + " A" + r + "," + r + " 0 0 1 " + r + ",0.5 Z";
+        Object.assign(el.style, { left: L + "px", top: top + "px", width: W + "px", height: H + "px" });
+        const svg = el.querySelector("svg");
+        svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+        svg.querySelector("path").setAttribute("d", d);
+        Object.assign(arrow.style, { left: X + sw / 2 - 5 + "px", top: H - (stBot - stTop) / 2 - 3 + "px" });
+        card.scrollTop = scrolled;
+    };
+    place();
+    el.place = place;
     // (its tab is pressed to put it away; not by the lifting of the finger that held its button down to open it)
     let fresh = true;
     el.addEventListener("pointerdown", () => { fresh = false; }, true);
@@ -1168,30 +1186,93 @@ function slotPop(v, b)
     popFrom(b, '<div class="choices">' + sl.tools.map(t => '<button class="glyph' + (pen.slots[sl.id] === t[0] ? " on" : "") + '" data-tool="' + t[0] + '" aria-label="' + t[2] + '" title="' + t[2] + '">' + icon(t[1], 20) + "</button>").join("") + "</div>",
         card => card.querySelectorAll("[data-tool]").forEach(x => x.addEventListener("click", () => { closePop(); useTool(x.dataset.tool, v); })));
 }
-// The brush's size, and the colors to draw in: the project's last used and its palette, then a few of the app's own.
-// Picking one leaves it open (to pick the other too); a tap away, or on its tab, puts it away.
+// The brush and its color, as Board's Quick Color has them: its size and how opaque, the color (a field of its
+// saturation and brightness, and hue, saturation and brightness to slide), and the palette, this phone's own to add to
+// and take from. It stays open while it is used; a tap away, or on its tab, puts it away.
 function inkPop(v, b)
 {
-    const doc = project.base.doc, own = () => remembered("canopy.inks", []);
-    const all = () => [...new Set([...own(), ...(doc.recent || []), ...doc.palette, ...INKS].map(c => c.slice(0, 7).toUpperCase()))].slice(0, 23);
-    const html = () => '<div class="psection">Size</div><div class="sizes">' + SIZES.map(z => '<button class="sizedot' + (z === pen.size ? " on" : "") + '" data-size="' + z + '" aria-label="Size ' + z + '">' + dot(z, pen.color) + "</button>").join("") + "</div>"
-        + '<div class="psection">Color</div><div class="inks">' + all().map(c => '<button class="inkdot' + (c === pen.color.toUpperCase() ? " on" : "") + '" data-ink="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>').join("")
-        + '<label class="inkdot custom" aria-label="Another color" title="Another color">' + icon("plus", 18) + '<input type="color" value="' + pen.color.slice(0, 7) + '"></label></div>';
-    const take = (card, c) =>
+    const pal = () => remembered("canopy.palette", null) || PALETTE.slice();
+    let hsv = toHsv(pen.color), editing = false, shown = 0;
+    const hue = h => "hsl(" + h + ",100%,50%)";
+    // (a slider the whole width; Size and Opacity, each with its mark before it)
+    const marks = { size: '<i class="qsize" aria-hidden="true"></i>', opacity: icon("opacity", 20) };
+    const slider = (id, label, min, max, step, val) => '<div class="qrow' + (label ? " named" : "") + '">' + (label ? '<span class="qmark" title="' + label + '">' + marks[id] + "</span>" : "") + '<input type="range" class="qslide" data-q="' + id + '" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" aria-label="' + ({ h: "Hue", s: "Saturation", v: "Brightness" }[id] || label) + '"></div>';
+    const swatches = () => pal().map(c => '<button class="qcolor' + (!editing && c === pen.color.toUpperCase() ? " on" : "") + (editing ? " gone" : "") + '" data-ink="' + c + '" style="background:' + c + '" aria-label="' + (editing ? "Remove " : "") + c + '">' + (editing ? icon("close", 14) : "") + "</button>").join("");
+    const html = '<div class="quick">'
+        + slider("size", "Size", 0, 1, 0.001, sizeAt(pen.size)) + slider("opacity", "Opacity", 5, 100, 1, Math.round(pen.opacity * 100))
+        + '<hr class="qline"><div class="qfield"><i class="qknob"></i></div>'
+        + slider("h", "", 0, 360, 1, hsv[0]) + slider("s", "", 0, 100, 1, hsv[1]) + slider("v", "", 0, 100, 1, hsv[2])
+        + '<hr class="qline"><div class="qpal"><span>Palette</span><button class="qicon" data-q="add" aria-label="Add the current color" title="Add the current color">' + icon("plus", 18) + '</button><button class="qicon" data-q="edit" aria-label="Remove colors" title="Remove colors">' + icon("more", 18) + "</button></div>"
+        + '<div class="qswatches">' + swatches() + '</div><div class="qedit"><button class="qbtn" data-q="reset">Reset</button><button class="qbtn" data-q="done">Done</button></div></div>';
+    popFrom(b, html, card =>
     {
-        pen.color = c.toUpperCase();
-        if (TOOL_OF[pen.kind].slot !== "brush" && pen.kind !== "fill") { pen.kind = pen.slots.brush; markSlots(v); }   // (a color is to paint with)
-        keepPen(); card.innerHTML = html(); wireIt(card); b.innerHTML = dot(pen.size, pen.color);
-    };
-    const wireIt = card =>
-    {
-        // Another color, from the phone's own picker: kept among these, first, for next time.
-        const pickr = card.querySelector('input[type="color"]');
-        if (pickr) pickr.addEventListener("change", () => { const c = pickr.value.toUpperCase(); remember("canopy.inks", [c].concat(own().filter(x => x !== c)).slice(0, 6)); take(card, c); });
-        card.querySelectorAll("[data-size]").forEach(x => x.addEventListener("click", () => { pen.size = +x.dataset.size; keepPen(); card.innerHTML = html(); wireIt(card); b.innerHTML = dot(pen.size, pen.color); }));
-        card.querySelectorAll("[data-ink]").forEach(x => x.addEventListener("click", () => take(card, x.dataset.ink)));
-    };
-    popFrom(b, html(), wireIt);
+        const field = card.querySelector(".qfield"), knob = card.querySelector(".qknob"), inks = card.querySelector(".qswatches");
+        const q = id => card.querySelector('[data-q="' + id + '"]');
+        const show = () =>
+        {
+            const [h, sa, va] = hsv;
+            field.style.background = "linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, " + hue(h) + ")";
+            knob.style.left = sa + "%"; knob.style.top = 100 - va + "%"; knob.style.background = pen.color;
+            q("h").value = h; q("s").value = sa; q("v").value = va;
+            q("h").style.background = "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)";
+            q("s").style.background = "linear-gradient(to right, " + fromHsv(h, 0, va) + ", " + fromHsv(h, 100, va) + ")";
+            q("v").style.background = "linear-gradient(to right, #000, " + fromHsv(h, sa, 100) + ")";
+            q("opacity").style.background = "linear-gradient(to right, transparent, " + pen.color + "), repeating-conic-gradient(#888 0 25%, #bbb 0 50%) 0 0 / 10px 10px";
+            inks.innerHTML = swatches();
+            card.querySelector(".qedit").hidden = !editing;
+            b.innerHTML = dot(pen.size, pen.color, pen.opacity);
+            const tall = card.offsetHeight;
+            if (tall !== shown && popEl && popEl.place) { shown = tall; popEl.place(); }   // (the palette grown or shrunk: the card fitted to it)
+        };
+        const take = (c, from) =>
+        {
+            pen.color = c.toUpperCase();
+            if (from !== "hsv") hsv = toHsv(pen.color);
+            if (TOOL_OF[pen.kind].slot !== "brush" && pen.kind !== "fill") { pen.kind = pen.slots.brush; markSlots(v); }   // (a color is to paint with)
+            keepPen(); show();
+        };
+        const setHsv = (h, sa, va) => { hsv = [h, sa, va]; take(fromHsv(h, sa, va), "hsv"); };
+        // The field: dragged across for saturation, up and down for brightness.
+        field.addEventListener("pointerdown", e =>
+        {
+            field.setPointerCapture(e.pointerId);
+            const at = ev => { const r = field.getBoundingClientRect(); setHsv(hsv[0], Math.round(Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * 100), Math.round((1 - Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height))) * 100)); };
+            at(e);
+            const mv = ev => at(ev), up = () => { field.removeEventListener("pointermove", mv); field.removeEventListener("pointerup", up); field.removeEventListener("pointercancel", up); };
+            field.addEventListener("pointermove", mv); field.addEventListener("pointerup", up); field.addEventListener("pointercancel", up);
+        });
+        for (const k of ["h", "s", "v"]) q(k).addEventListener("input", () => setHsv(+q("h").value, +q("s").value, +q("v").value));
+        q("size").addEventListener("input", () => { pen.size = sizeOf(+q("size").value); keepPen(); b.innerHTML = dot(pen.size, pen.color, pen.opacity); });
+        q("opacity").addEventListener("input", () => { pen.opacity = +q("opacity").value / 100; keepPen(); b.innerHTML = dot(pen.size, pen.color, pen.opacity); });
+        inks.addEventListener("click", e =>
+        {
+            const x = e.target.closest("[data-ink]");
+            if (!x) return;
+            if (editing) { remember("canopy.palette", pal().filter(c => c !== x.dataset.ink)); feel.gone(); show(); }
+            else take(x.dataset.ink);
+        });
+        q("add").addEventListener("click", () => { const c = pen.color.toUpperCase(), now = pal(); if (!now.includes(c)) { remember("canopy.palette", now.concat([c])); feel.pick(); } editing = false; show(); });
+        q("edit").addEventListener("click", () => { editing = !editing; show(); });
+        q("done").addEventListener("click", () => { editing = false; show(); });
+        q("reset").addEventListener("click", () => { remember("canopy.palette", null); editing = false; show(); });
+        show();
+    });
+}
+// The size slider: even steps for the small sizes, bigger ones as it goes (0 to 1, to a size on the screen).
+function sizeOf(k) { return Math.round(SIZE.least * Math.pow(SIZE.most / SIZE.least, k) * 10) / 10; }
+function sizeAt(size) { return Math.log(size / SIZE.least) / Math.log(SIZE.most / SIZE.least); }
+function toHsv(c)
+{
+    const [r, g, b] = [1, 3, 5].map(k => parseInt((c || "#000000").slice(k, k + 2), 16) / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0;
+    if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [Math.round((h * 60 + 360) % 360), Math.round(mx ? d / mx * 100 : 0), Math.round(mx * 100)];
+}
+function fromHsv(h, s, v)
+{
+    s /= 100; v /= 100;
+    const f = n => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+    return "#" + [f(5), f(3), f(1)].map(x => Math.round(x * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 // The slots lit as the tool in use is, the popover left open.
 function markSlots(v)
@@ -1227,7 +1308,9 @@ function drawTarget(existing)
     else if (on && (k = project.view.sketches.find(o => o.id === on && !o.base))) id = on;
     else if (existing) return null;
     else { id = cnpy.newId(); drawOnto(id); }
-    const name = k ? k.name : base ? saved.name : drawingName(), layer = k ? k.layer : base ? cnpy.layerOf(doc, saved) : cnpy.topLayer(doc);
+    const name = k ? k.name : base ? saved.name : drawingName();
+    let layer = k ? k.layer : base ? cnpy.layerOf(doc, saved) : cnpy.topLayer(doc);
+    if (layer && project.view.droppedLayers && project.view.droppedLayers.has(layer.id)) { const l = hierarchyModel().layers.find(x => x.id); layer = l ? { id: l.id, name: l.name } : null; }   // (that layer deleted here: the top one left)
     return { id, base, name, layer };
 }
 function strokeStep(tg, stroke) { return { t: "stroke", list: null, id: tg.id, base: tg.base, name: tg.name, layer: tg.layer, author: dbx.who(), stroke: { sid: cnpy.newId(), ...stroke } }; }
@@ -1244,7 +1327,7 @@ function drawPress(v, at, e)
 // second finger (to pan or zoom) takes it back.
 function strokeFrom(v, at, e)
 {
-    const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: Math.round(pen.size / v.cam.s * 100) / 100, pts: [] });
+    const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: Math.round(pen.size / v.cam.s * 100) / 100, pts: [], ...(pen.opacity < 1 ? { opacity: pen.opacity } : {}) });
     const pts = s.stroke.pts;
     // Each position eased toward, as Board's brush does at its Smoothing setting (0.35, its own to start with), which
     // irons out a finger's wobble; the line is drawn as curves through the eased points (render.js, drawStrokes).
@@ -1272,7 +1355,8 @@ function strokeFrom(v, at, e)
     add(at, e);
     project.preview = s;
     refreshView();
-    const wet = v.wet = { id: s.base || s.id, pts, ahead: [] };   // (a saved drawing: its strokes are drawn on it, in its place)
+    const wet = v.wet = { id: s.base || s.id, pts, ahead: [] };
+    let mine = null;   // (its undoing, once made)   // (a saved drawing: its strokes are drawn on it, in its place)
     v.redraw();
     return {
         move(now, was, ev)
@@ -1295,9 +1379,17 @@ function strokeFrom(v, at, e)
         {
             // The rest of the way to where the finger lifted (easing leaves the line a little behind it).
             if (rawX !== null && pts.length > 3 && Math.hypot(rawX - ex, rawY - ey) >= 0.75) keep(rawX, rawY, rawP, pts);
-            v.wet = null; project.preview = null; step(s); redrawViewers();
+            v.wet = null; project.preview = null; step(s); mine = undos[undos.length - 1]; redrawViewers();
         },
-        cancel() { v.wet = null; project.preview = null; refreshView(); v.redraw(); }
+        cancel() { v.wet = null; project.preview = null; refreshView(); v.redraw(); },
+        // A dab that turned out to be the first tap of a double tap (to zoom): taken back, as if never made.
+        dab: true,
+        undo()
+        {
+            if (!mine || undos[undos.length - 1] !== mine) return;
+            if (project.steps[project.steps.length - 1] === s) { undos.pop(); project.steps.pop(); refreshView(); keepSteps(); undoable(); redrawViewers(); if (!project.steps.length && state === "pending") { clearTimeout(saveTimer); setState("saved"); } }   // (not saved yet: simply never made)
+            else { undoRedo(false); redos.pop(); undoable(); }
+        }
     };
 }
 // The Eyedropper: the color drawn where it is pressed (as the screen shows it), to paint with; back to the brush.
@@ -1308,7 +1400,9 @@ function dropperAt(v, at)
     pen.color = "#" + [px[0], px[1], px[2]].map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase();
     pen.kind = pen.slots.brush;
     keepPen(); tools(v);
-    toast(pen.color + " is the current color");
+    // (the color taken: shown by the bar's color pulsing, nothing said)
+    const ink = (v.host.parentNode || document).querySelector('.drawbar [data-act="ink"] i');
+    if (ink && !calm) ink.animate([{ transform: "scale(1)" }, { transform: "scale(1.6)" }, { transform: "scale(1)" }], { duration: 360, easing: "cubic-bezier(.2,.9,.3,1)" });
 }
 // Fill: the area pressed (as far as the color there goes, of what the screen shows), painted in the color, onto the
 // drawing being drawn on. Kept as a picture of what it filled, so it lands the same when saved.
@@ -1362,15 +1456,15 @@ function selectFrom(v, at)
         const s = strokeStep(tg, { kind: "move", pts: paintSel.pts.slice(), dx: 0, dy: 0 });
         project.preview = s; refreshView(); v.redraw();
         return {
-            move(now) { const c = v.toCanvas(now.x, now.y); s.stroke.dx = Math.round((c.x - c0.x) * 10) / 10; s.stroke.dy = Math.round((c.y - c0.y) * 10) / 10; refreshView(); v.redraw(); },
+            move(now) { const c = v.toCanvas(now.x, now.y); s.stroke.dx = Math.round((c.x - c0.x) * 10) / 10; s.stroke.dy = Math.round((c.y - c0.y) * 10) / 10; paintSel.by = { dx: s.stroke.dx, dy: s.stroke.dy }; refreshView(); v.redraw(); },   // (its outline going along with it)
             end()
             {
-                project.preview = null;
+                project.preview = null; paintSel.by = null;
                 if (s.stroke.dx || s.stroke.dy) { step(s); paintSel = { pts: paintSel.pts.map((q, i) => q + (i % 2 ? s.stroke.dy : s.stroke.dx)) }; }
                 else refreshView();
                 redrawViewers();
             },
-            cancel() { project.preview = null; refreshView(); v.redraw(); }
+            cancel() { project.preview = null; paintSel.by = null; refreshView(); v.redraw(); }
         };
     }
     if (!drawTarget(true)) { toast("Choose a drawing to select on, in the Hierarchy"); return null; }
@@ -1413,6 +1507,16 @@ function clearSelection(v)
     step(strokeStep(tg, { kind: "clear", pts: paintSel.pts.slice() }));
     paintSel = null; feel.gone(); tools(v); redrawViewers();
 }
+// Drawing Select's outline, as a move of what it holds is undone (back where it was) or done again (where it went).
+function selectionWith(doing)
+{
+    if (!pen) return;
+    for (const x of doing)
+    {
+        if (x.t === "unstroke") { const k = project.view.sketches.find(o => o.id === x.id), st = k && k.strokes.find(o => o.sid === x.sid); if (st && st.kind === "move") paintSel = { pts: st.pts.slice() }; }
+        if (x.t === "stroke" && x.stroke.kind === "move") paintSel = { pts: x.stroke.pts.map((q, i) => q + (i % 2 ? x.stroke.dy : x.stroke.dx)) };
+    }
+}
 // The selection's outline over the canvas, marching black and white so it shows on any paint.
 function drawSelection(v, ctx)
 {
@@ -1420,7 +1524,8 @@ function drawSelection(v, ctx)
     if (!pen || !p || p.length < 4) return;
     ctx.save();
     ctx.beginPath();
-    for (let i = 0; i < p.length; i += 2) { const q = v.toScreen(p[i], p[i + 1]); if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); }
+    const by = !selecting && paintSel.by ? paintSel.by : { dx: 0, dy: 0 };
+    for (let i = 0; i < p.length; i += 2) { const q = v.toScreen(p[i] + by.dx, p[i + 1] + by.dy); if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); }
     if (!selecting || selecting.box) ctx.closePath();
     ctx.lineWidth = 1.2; ctx.strokeStyle = "#fff"; ctx.stroke();
     ctx.setLineDash([4, 4]); ctx.strokeStyle = "#000"; ctx.stroke();
@@ -1619,6 +1724,8 @@ function hierarchyModel()
     }
     for (const e of (project.view.newLayers || []).slice().reverse()) if (!byLayer.has(e.id)) { byLayer.set(e.id, []); layers.unshift(e.id); }   // (made here: on top)
     for (const e of doc.empties) if (!byLayer.has(e.id)) { byLayer.set(e.id, []); layers.push(e.id); }
+    const gone = project.view.droppedLayers || new Set();
+    for (let i = layers.length - 1; i >= 0; i--) if (gone.has(layers[i]) && !byLayer.get(layers[i]).length) layers.splice(i, 1);
     return { layers: layers.map(id => ({ id, name: id ? names.get(id) || "Layer" : "No layer", items: byLayer.get(id) })), inDoc };
 }
 // An object's name in the hierarchy: a drawing with strokes not yet saved marked * (as Board marks what is unsaved).
@@ -1642,7 +1749,8 @@ function hierarchy()
             h += '<div class="hrow hlayer' + (hid ? " off" : "") + '" data-layer="' + text(lid) + '">'
                 + '<button class="hname" data-do="hfold" data-value="' + text(lid) + '">' + icon(fold ? "chevron" : "open", 16) + icon("folder", 18) + "<span>" + text(l.name) + "</span></button>"
                 + (l.id && !shut ? '<button class="hbtn' + (hid ? " set" : "") + '" data-do="hlayerhide" data-value="' + text(lid) + '" aria-label="' + (hid ? "Show" : "Hide") + '">' + icon(hid ? "eyeoff" : "eye", 18) + "</button>"
-                    + '<button class="hbtn' + (lk ? " set" : "") + '" data-do="hlayerlock" data-value="' + text(lid) + '" aria-label="' + (lk ? "Unlock" : "Lock") + '">' + icon("lock", 18) + "</button>" : "")
+                    + '<button class="hbtn' + (lk ? " set" : "") + '" data-do="hlayerlock" data-value="' + text(lid) + '" aria-label="' + (lk ? "Unlock" : "Lock") + '">' + icon("lock", 18) + "</button>"
+                    + '<button class="hbtn" data-do="hlayermore" data-value="' + text(lid) + '" aria-label="More">' + icon("more", 18) + "</button>" : "")
                 + "</div>";
             if (fold) continue;
             for (const o of l.items)
@@ -1675,6 +1783,7 @@ function hierarchy()
         if (does === "hnew") { drawOnto(null); if (!pen) drawMode(); else tools(v); toast("Your next stroke starts a new drawing"); close(() => { }); return; }
         if (does === "hlayerhide") { step({ t: "hidelayer", list: null, id: value, on: !project.scene.hides.has(value) }); redrawViewers(); again(); return; }
         if (does === "hlayerlock") { const lk = layerLocked(value); step(lk ? { t: "lock", list: null, ids: [], on: false, groups: [value] } : { t: "lock", list: null, ids: [], on: true, relock: [value] }); if (picked) tools(picked.viewer); redrawViewers(); again(); return; }
+        if (does === "hlayermore") { const l = hierarchyModel().layers.find(x => x.id === value); if (l) close(() => layerMenu(l)); return; }
         if (!o) return;
         if (does === "hpick")
         {
@@ -1748,6 +1857,24 @@ function moveRow(row, e, sheet)
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
     handle.addEventListener("lostpointercapture", up);
+}
+// A layer's menu, from its row: delete it, and what is in it (one step, undone as one).
+function layerMenu(l)
+{
+    const n = l.items.length;
+    const build = () => '<div class="ptitle mtitle"><button class="hbtn" data-do="back" aria-label="Back to the hierarchy">' + icon("back", 18) + "</button><span>" + text("Layer \u00b7 " + l.name) + "</span></div>"
+        + '<button class="pick danger" data-do="delete"><span>Delete layer</span><span class="kind-name">' + (n ? "and the " + (n === 1 ? "one thing" : n + " things") + " in it" : "it's empty") + "</span></button>";
+    sheetUp(build, (does, value, close) =>
+    {
+        if (does === "back") { close(() => hierarchy()); return; }
+        if (does !== "delete") return;
+        const ids = l.items.map(o => o.id);
+        if (picked && picked.ids.some(id => ids.includes(id))) pick(null, picked.viewer);
+        if (ids.includes(project.drawOn)) drawOnto(null);
+        step({ t: "droplayer", list: null, id: l.id, ids });
+        feel.gone();
+        close(() => { redrawViewers(); hierarchy(); });
+    });
 }
 // An object's menu, from its row: rename, duplicate, delete; a drawing's: draw on it, merge it down.
 function objectMenu(o)
@@ -2096,9 +2223,10 @@ function statusHtml()
 {
     if (!project) return "";
     if (project.local) return '<button class="icon status" data-do="copy" aria-label="Save a copy" title="Save a copy">' + icon("download") + "</button>";
-    // A round mark: a tick once saved (lit as a save lands), turning while saving, a warning while it can't be.
-    const words = { saved: "Saved", saving: "Saving", waiting: "Not saved yet" + (stateWhy ? ": " + stateWhy : ""), updated: "Updated from Dropbox" }[state] || "";
-    const mark = state === "saving" ? "saving" : state === "waiting" ? "waiting" : "saved";
+    // A round mark: a tick once saved (lit as a save lands), a still ring while changes wait to be saved, turning only
+    // while a save is under way, a warning while it can't be.
+    const words = { saved: "Saved", pending: "Changes to save", saving: "Saving", waiting: "Not saved yet" + (stateWhy ? ": " + stateWhy : ""), updated: "Updated from Dropbox" }[state] || "";
+    const mark = state === "saving" || state === "pending" ? "saving" : state === "waiting" ? "waiting" : "saved";
     return '<button class="icon status ' + state + (landed ? " landed" : "") + '" data-do="refresh" aria-label="' + text(words) + '" title="' + text(words) + '">' + icon(mark) + "</button>";   // (tapped: saved now, and checked for changes)
 }
 let landed = false;   // a save just landed: the tick lit for a moment
@@ -2145,7 +2273,11 @@ function undoRedo(redo)
     finishTyping(false, false);
     const from = redo ? redos : undos, to = redo ? undos : redos;
     if (!from.length) return;
-    const again = run(from.pop());
+    const doing = from.pop();
+    selectionWith(doing);
+    const again = run(doing);
+    // (strokes on a drawing that has since been saved: painted into it, so there is nothing left here to take back)
+    if (!again.length && doing.every(x => x.t === "unstroke" || x.t === "stroke")) toast("Saved strokes can't be undone");
     if (again.length) to.push(again);
     if (picked) picked.ids = picked.ids.filter(id => project.scene.items.some(o => o.id === id));
     if (picked && !picked.ids.length) picked = null;
@@ -2162,7 +2294,7 @@ function changed()
     undoable();
     redrawViewers();
     if (project.local) return;
-    setState("saving");
+    if (state !== "saving") setState("pending");
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, pen ? 20000 : 900);   // (drawing: saved once it pauses a while, or Done; each time Draw is begun, one drawing)
 }
@@ -2173,6 +2305,7 @@ async function save()
     if (!project || project.local || saving || project.steps.length === 0) return;
     saving = true;
     const p = project;
+    setState("saving");
     try
     {
         await photosReady(p);
@@ -2201,7 +2334,7 @@ async function save()
         keepSteps();
         forgetPhotos(p);
         problem = "";
-        setState(project.steps.length ? "saving" : "saved");
+        setState(project.steps.length ? "pending" : "saved");
         if (project.steps.length) saveTimer = setTimeout(save, 400);
         if (!editing && !sheetOpen()) show(); else { redrawViewers(); if (sheetOpen()) redrawEntries(); }
     }
@@ -2360,7 +2493,7 @@ async function openPath(path)
         refreshView();
         remember("canopy.recent", [path, ...remembered("canopy.recent", []).filter(r => r !== path)].slice(0, 5));
         open = null;
-        setState(waiting.length ? "saving" : "saved");
+        setState(waiting.length ? "pending" : "saved");
         show();
         if (waiting.length) save();
     }
