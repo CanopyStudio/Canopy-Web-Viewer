@@ -2,6 +2,7 @@
 // says where on the canvas it was. Drawn by render.js, only when something changes.
 
 import * as render from "./render.js";
+import * as gpu from "./gl.js";
 
 export class Viewer
 {
@@ -19,7 +20,8 @@ export class Viewer
         this.queued = false;
         this.movingUntil = 0;
         this.resize = () => this.fitCanvas();
-        new ResizeObserver(this.resize).observe(host);
+        this.watch = new ResizeObserver(this.resize);
+        this.watch.observe(host);
         // Turning the phone: its size again once the turn has settled (the observer can hear only a size from part way
         // through, leaving the canvas the old shape, and strokes off from the finger).
         this.turned = () =>
@@ -42,7 +44,9 @@ export class Viewer
     fitCanvas()
     {
         const dpr = Math.min(3, window.devicePixelRatio || 1);   // (its size as laid out, not as an opening animation shows it)
-        this.w = Math.max(1, this.host.clientWidth); this.h = Math.max(1, this.host.clientHeight); this.dpr = dpr;
+        const w = Math.max(1, this.host.clientWidth), h = Math.max(1, this.host.clientHeight);
+        if (w === this.w && h === this.h && dpr === this.dpr && this.canvas.width === Math.round(w * dpr) && !this.pending) return;   // (told of a size it has already)
+        this.w = w; this.h = h; this.dpr = dpr;
         this.canvas.width = Math.round(this.w * dpr); this.canvas.height = Math.round(this.h * dpr);
         this.canvas.style.width = this.w + "px"; this.canvas.style.height = this.h + "px";
         if (this.pending) { const a = this.pending; this.pending = null; this.fit(a, 0, false); }
@@ -50,24 +54,127 @@ export class Viewer
     }
 
     moving() { this.movingUntil = performance.now() + 140; }
-    redraw()
+    // Put away for good: its canvases, what it kept on the graphics chip, and what it listened to let go.
+    dispose()
+    {
+        this.gone = true;
+        this.watch.disconnect();
+        window.removeEventListener("orientationchange", this.turned);
+        if (window.visualViewport) window.visualViewport.removeEventListener("resize", this.turned);
+        clearTimeout(this.sharpen); clearTimeout(this.tapTimer);
+        if (this.painter) this.painter.dispose();
+        this.painter = null;
+        if (this.glCanvas) this.glCanvas.remove();
+        this.canvas.remove();
+        for (const c of [this.wetUnder, this.wetOver, this.overCanvas]) if (c) c.width = c.height = 0;
+        this.wet = null;
+    }
+    redraw() { this.whole = true; this.frame(); }
+    // Only the stroke under way changed: drawn again on the graphics chip alone, when it is showing the drawing.
+    redrawWet() { this.frame(); }
+    frame()
     {
         if (this.queued) return;
         this.queued = true;
         requestAnimationFrame(() =>
         {
             this.queued = false;
+            const whole = this.whole;
+            this.whole = false;
             const sc = this.scene();
             if (!sc || !this.canvas.isConnected) return;   // (gone since it was asked for)
             // (moving: pictures scaled quickly; drawn well again once it stops)
             const fast = performance.now() < this.movingUntil;
             const t0 = performance.now();
-            if (!this.wetDraw(sc)) render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
+            const on = this.painting(sc);
+            if (on) this.paintFrame(sc, on, fast, !whole);
+            else
+            {
+                if (this.glCanvas && this.glCanvas.style.display !== "none") { this.glCanvas.style.display = "none"; this.painter.forget(); }
+                if (!this.wetDraw(sc)) render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
+            }
             render.stats.draws.push({ at: t0, ms: performance.now() - t0 }); if (render.stats.draws.length > 60) render.stats.draws.shift();
             clearTimeout(this.sharpen);
             if (fast) this.sharpen = setTimeout(() => this.redraw(), 160);
-            if (this.overlay) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
+            if (this.overlay && !on) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
         });
+    }
+
+    // The view as it shows now, on a canvas of its own the view's size in pixels (with the drawing on the chip drawn in
+    // too): what a fill floods and the eyedropper takes its color from.
+    snapshot()
+    {
+        const c = document.createElement("canvas");
+        c.width = this.canvas.width; c.height = this.canvas.height;
+        const sc = this.scene();
+        if (sc) render.draw(c.getContext("2d", { willReadFrequently: true }), sc, this.cam, this.w, this.h, this.dpr, this.get, () => { }, {});
+        return c;
+    }
+
+    // ---- drawing, on the graphics chip (gl.js) ----
+
+    // The drawing being drawn on, when the chip can show it: { at (its place in the scene), o }; else null (all drawn
+    // here, as ever). "paintOn" (the app's) says which drawing is drawn on while drawing.
+    painting(sc)
+    {
+        if (!this.paintOn || this.glOff) return null;
+        const id = (this.wet && this.wet.id) || this.paintOn();
+        if (!id) return null;
+        const at = sc.items.findIndex(x => x.id === id);
+        if (at < 0) return null;
+        const o = sc.items[at];
+        if ((o.kind !== "sketch" && o.kind !== "paint") || o.angle || o.shear || o.flipX || o.flipY || (o.blend && o.blend !== "normal") || o.merged || render.hidden(sc, o)) return null;
+        if (o.group && sc.masks.size) { const ids = o.group.split("/"); for (let k = 1; k <= ids.length; k++) if (sc.masks.has(ids.slice(0, k).join("/"))) return null; }   // (clipped by a mask)
+        if ((o.strokes || []).some(st => st.kind === "move" || st.kind === "clear")) return null;   // (selections moved or cleared: drawn here)
+        if (sc.items.slice(at + 1).some(x => x.blend && x.blend !== "normal" && !render.hidden(sc, x))) return null;   // (something over it blending with it: drawn here, together)
+        if (!this.painter)
+        {
+            const c = document.createElement("canvas");
+            c.className = "viewer paint";
+            Object.assign(c.style, { position: "absolute", left: "0", top: "0", width: this.w + "px", height: this.h + "px", pointerEvents: "none" });
+            this.host.appendChild(c);
+            this.painter = gpu.painter(c);
+            if (!this.painter) { c.remove(); this.glOff = true; return null; }
+            this.glCanvas = c;
+        }
+        if (this.painter.failed)
+        {
+            // (the chip took its pictures back, as a phone may when the app is put away: a fresh start next time,
+            // drawn here meanwhile; given up on only if it keeps happening)
+            this.painter.dispose(); this.painter = null; this.glCanvas.remove(); this.glCanvas = null;
+            this.glLost = (this.glLost || 0) + 1;
+            if (this.glLost > 3) this.glOff = true;
+            return null;
+        }
+        return { at, o };
+    }
+    // What is under the drawing drawn here (when more than the stroke under way changed), what is over it (and what is
+    // picked) drawn for the chip to lay over it, and the drawing itself shown from the chip.
+    paintFrame(sc, on, fast, wetOnly)
+    {
+        if (!wetOnly)
+        {
+            // (the boards' names drawn under it here, not over: else what is over it would be drawn and taken to the
+            // chip each time the view moves, in nearly every project)
+            render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast, part: { from: 0, to: on.at, under: true, names: true } });
+            const over = sc.items.slice(on.at + 1).some(x => !render.hidden(sc, x)), marks = this.overlay && this.overlayNeeded && this.overlayNeeded();
+            if (over || marks)
+            {
+                if (!this.overCanvas) this.overCanvas = document.createElement("canvas");
+                const oc = this.overCanvas;
+                if (oc.width !== this.canvas.width || oc.height !== this.canvas.height) { oc.width = this.canvas.width; oc.height = this.canvas.height; }
+                const g = oc.getContext("2d");
+                g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.clearRect(0, 0, oc.width, oc.height);
+                if (over) render.draw(g, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast, part: { from: on.at + 1, to: sc.items.length } });
+                if (marks) { g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; this.overlay(g); }
+                this.painter.over(oc);
+            }
+            else this.painter.over(null);
+        }
+        Object.assign(this.glCanvas.style, { display: "", width: this.w + "px", height: this.h + "px" });
+        const ctx = this.ctx;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.painter.show(on.o, render.box(on.o, ctx), sc.doc, this.get, this.cam, this.dpr, this.w, this.h, this.wet && this.wet.stroke, render.fade(sc.doc, on.o), fast);
     }
 
     // A stroke under way ("wet": the drawing it is on, and any points guessed ahead of the finger): what is under that
@@ -83,7 +190,7 @@ export class Viewer
         if (wet.key !== key)
         {
             const layer = c => { c = c || document.createElement("canvas"); c.width = W; c.height = H; return c; };
-            wet.under = layer(wet.under); wet.over = layer(wet.over);
+            wet.under = this.wetUnder = layer(this.wetUnder); wet.over = this.wetOver = layer(this.wetOver);   // (the same two each stroke)
             render.draw(wet.under.getContext("2d"), sc, this.cam, this.w, this.h, this.dpr, this.get, () => { }, { part: { from: 0, to: at, under: true } });
             render.draw(wet.over.getContext("2d"), sc, this.cam, this.w, this.h, this.dpr, this.get, () => { }, { part: { from: at + 1, to: sc.items.length, names: true } });
             wet.key = key;

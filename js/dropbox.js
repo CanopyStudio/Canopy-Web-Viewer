@@ -45,8 +45,8 @@ export async function finish()
 
 async function tokenCall(fields)
 {
-    const r = await fetch(TOKEN, { method: "POST", body: new URLSearchParams(fields) });
-    if (!r.ok) throw new Error("Dropbox sign-in failed (" + r.status + ").");
+    const r = await net(TOKEN, { method: "POST", body: new URLSearchParams(fields) });
+    if (!r.ok) { const e = new Error("Dropbox sign-in failed (" + r.status + ")."); e.status = r.status; throw e; }
     return await r.json();
 }
 
@@ -58,13 +58,16 @@ async function access()
     if (k.access && Date.now() < k.until) return k.access;
     let got;
     try { got = await tokenCall({ grant_type: "refresh_token", refresh_token: k.refresh, client_id: key() }); }
-    catch (e) { if (navigator.onLine) { keep(null); throw new SignedOut(); } throw e; }
+    catch (e) { if (e.status === 400 || e.status === 401) { keep(null); throw new SignedOut(); } throw e; }   // (signed out only when Dropbox says so: not for no connection)
     k.access = got.access_token;
     k.until = Date.now() + (got.expires_in - 60) * 1000;
     keep(k);
     return k.access;
 }
 export class SignedOut extends Error { constructor() { super("Signed out of Dropbox."); } }
+// No connection (or Dropbox couldn't be reached at all): not an answer from Dropbox, so nothing is taken from it.
+export class Offline extends Error { constructor() { super("No connection."); } }
+async function net(url, options) { try { return await fetch(url, options); } catch (e) { throw new Offline(); } }
 export class Conflict extends Error { constructor() { super("The file changed since it was read."); } }
 
 // A team's Dropbox: its shared folders sit above the person's own, so calls are made from the team's top.
@@ -90,7 +93,7 @@ function arg(o) { return JSON.stringify(o).replace(/[\u007f-￿]/g, c => "\\u" +
 
 async function rpc(name, body)
 {
-    const r = await fetch(API + name, { method: "POST", headers: await headers(body === null ? {} : { "Content-Type": "application/json" }), body: body === null ? null : JSON.stringify(body) });
+    const r = await net(API + name, { method: "POST", headers: await headers(body === null ? {} : { "Content-Type": "application/json" }), body: body === null ? null : JSON.stringify(body) });
     if (r.status === 401) { keep(null); throw new SignedOut(); }
     if (!r.ok) throw new Error("Dropbox: " + (await r.text()).slice(0, 200));
     return await r.json();
@@ -116,7 +119,7 @@ export async function thumbnails(paths, size)
     const out = new Map();
     for (let i = 0; i < paths.length; i += 25)
     {
-        const r = await fetch(CONTENT + "files/get_thumbnail_batch", { method: "POST", headers: await headers({ "Content-Type": "application/json" }),
+        const r = await net(CONTENT + "files/get_thumbnail_batch", { method: "POST", headers: await headers({ "Content-Type": "application/json" }),
             body: JSON.stringify({ entries: paths.slice(i, i + 25).map(path => ({ path, format: "jpeg", size: size || "w256h256", mode: "fitone_bestfit" })) }) });
         if (r.status === 401) { keep(null); throw new SignedOut(); }
         if (!r.ok) continue;
@@ -127,7 +130,7 @@ export async function thumbnails(paths, size)
 // A picture big enough to look at (or put on a canvas), as Dropbox makes it: a JPEG at most 2048 across.
 export async function preview(path)
 {
-    const r = await fetch(CONTENT + "files/get_thumbnail_v2", { method: "POST", headers: await headers({ "Dropbox-API-Arg": arg({ resource: { ".tag": "path", path }, format: "jpeg", size: "w2048h1536", mode: "fitone_bestfit" }) }) });
+    const r = await net(CONTENT + "files/get_thumbnail_v2", { method: "POST", headers: await headers({ "Dropbox-API-Arg": arg({ resource: { ".tag": "path", path }, format: "jpeg", size: "w2048h1536", mode: "fitone_bestfit" }) }) });
     if (r.status === 401) { keep(null); throw new SignedOut(); }
     if (!r.ok) throw new Error("Couldn't show that picture (" + r.status + ").");
     return await r.blob();
@@ -136,7 +139,7 @@ export async function preview(path)
 // A file's bytes and which version they are.
 export async function read(path)
 {
-    const r = await fetch(CONTENT + "files/download", { method: "POST", headers: await headers({ "Dropbox-API-Arg": arg({ path }) }) });
+    const r = await net(CONTENT + "files/download", { method: "POST", headers: await headers({ "Dropbox-API-Arg": arg({ path }) }) });
     if (r.status === 401) { keep(null); throw new SignedOut(); }
     if (!r.ok) throw new Error(r.status === 409 ? "That file isn't there any more." : "Couldn't open it from Dropbox (" + r.status + ").");
     const meta = JSON.parse(r.headers.get("Dropbox-API-Result"));
@@ -149,7 +152,7 @@ export async function version(path) { return (await rpc("files/get_metadata", { 
 // A file written back, only over the version "rev" (Conflict if it has changed since). Its new version.
 export async function write(path, bytes, rev)
 {
-    const r = await fetch(CONTENT + "files/upload", {
+    const r = await net(CONTENT + "files/upload", {
         method: "POST",
         headers: await headers({ "Content-Type": "application/octet-stream", "Dropbox-API-Arg": arg({ path, mode: { ".tag": "update", update: rev }, autorename: false, mute: true, strict_conflict: true }) }),
         body: bytes
@@ -163,7 +166,7 @@ export async function write(path, bytes, rev)
 // A new file, only if there is none of that name there already.
 export async function create(path, bytes)
 {
-    const r = await fetch(CONTENT + "files/upload", {
+    const r = await net(CONTENT + "files/upload", {
         method: "POST",
         headers: await headers({ "Content-Type": "application/octet-stream", "Dropbox-API-Arg": arg({ path, mode: "add", autorename: false, mute: true }) }),
         body: bytes

@@ -10,6 +10,7 @@ import { boardIcons } from "./icons.js";
 import { themes, sizes } from "./look.js";
 import { toned } from "./tone.js";
 import { VERSION } from "./version.js";
+import * as off from "./offline.js";
 
 const app = document.getElementById("app");
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -44,6 +45,7 @@ async function arrive(to, from)
     if (!to) to = { files: "" };
     if (to.files !== undefined)
     {
+        opening++;   // (a project still opening let go)
         const same = !project && folder === to.files && app.querySelector("main.page");   // (the same folder on show: left as it is)
         if (project) leaveProject();
         folder = to.files; remember("canopy.folder", folder);
@@ -71,6 +73,8 @@ window.addEventListener("popstate", e => { finishTyping(false, false); if (sheet
 function goBack() { if ((history.state && history.state.at || 0) > 0) history.back(); else if (project) { if (open) closeOver(); else go({ files: folder }); } else if (folder !== "") go({ files: folder.split("/").slice(0, -1).join("/") }); }
 function leaveProject()
 {
+    opening++;   // (one still opening let go)
+    keepNow();   // (its steps kept on the phone, whatever becomes of the save)
     closeViewers();
     if (project && project.steps.length && !project.local) save();   // (still saving: it carries on)
     if (project && !project.steps.length) render.forget(project.cache);   // (its pictures let go)
@@ -217,6 +221,7 @@ async function showFiles()
     }
     const pins = remembered("canopy.pinned", []);
     const recent = remembered("canopy.recent", []).filter(r => !pins.includes(r));
+    const phone = (await off.all()).sort((a, b) => fileName(a.path).localeCompare(fileName(b.path))), waits = await off.waiting();
     const at = history.state && history.state.at || 0;
     const arrows = iconButton("back", "back", "Back", "", at === 0 && folder === "") + iconButton("ahead", "forward", "Forward", "", at >= furthest());
     const inFolder = r => r.split("/").slice(-2, -1)[0] || "Dropbox";
@@ -225,6 +230,7 @@ async function showFiles()
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
         + (pins.length && folder === "" ? heading("pinned", "Pinned") + '<div class="rows" id="pinned">' + pins.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
         + (recent.length && folder === "" ? heading("recent", "Recent") + '<div class="rows">' + recent.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
+        + (phone.length && folder === "" ? heading("phone", "On this phone") + '<div class="rows">' + phone.map(k => item("file", fileName(k.path), waits.has(k.path) ? "Changes to save" : "Kept " + when(new Date(k.at).toISOString()), "open", k.path)).join("") + "</div>" : "")
         + heading("here", folder === "" ? "Dropbox" : folder.split("/").pop())
         + (folder !== "" && !folded().includes("here") ? '<div class="where">' + ["Dropbox"].concat(folder.split("/").filter(Boolean)).map(text).join(" / ") + "</div>" : "")
         + '<div class="rows" id="items"><div class="empty">Loading…</div></div>'
@@ -234,7 +240,19 @@ async function showFiles()
     arrangePins();
     let items;
     try { items = await dbx.list(folder); }
-    catch (e) { return failed(e); }
+    catch (e)
+    {
+        // (no connection: the projects kept on this phone are what can be opened)
+        if (!(e instanceof dbx.Offline)) return failed(e);
+        const h = document.getElementById("items");
+        if (h)
+        {
+            h.innerHTML = '<div class="empty">No connection.' + (phone.length ? " The projects on this phone open as ever, and save once you're back online." : " Projects kept on this phone (tap the arrow by one) open without one.") + "</div>"
+                + (folder !== "" ? phone.map(k => item("file", fileName(k.path), waits.has(k.path) ? "Changes to save" : "On this phone", "open", k.path)).join("") : "");   // (in a folder: they are here too)
+            wire(h);
+        }
+        return;
+    }
     const holder = document.getElementById("items");
     if (!holder || project) return;
     shownItems = items;
@@ -470,11 +488,21 @@ function heading(key, words)
 // is); a folder marked as one, and goes on into it; a project can be pinned.
 function item(kind, name, note, does, value)
 {
-    const pinned = kind === "file" && remembered("canopy.pinned", []).includes(value);
+    const pinned = kind === "file" && remembered("canopy.pinned", []).includes(value), kept = kind === "file" && off.has(value);
     return '<div class="item-row"><button class="item' + (kind === "folder" ? " folder" : "") + '" data-do="' + does + '" data-value="' + text(value) + '">'
         + (kind === "folder" ? icon("folder", 18) : kind === "picture" ? '<img class="thumb" alt="">' : "") + '<span class="name">' + text(name) + "</span>"
         + (note ? '<span class="note">' + text(note) + "</span>" : "") + (kind === "folder" ? icon("chevron", 16) : "") + "</button>"
-        + (kind === "file" ? '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to the top") + '" title="' + (pinned ? "Unpin" : "Pin to the top") + '">' + icon("pin", 16) + "</button>" : "") + "</div>";
+        + (kind === "file" ? '<button class="pin keep' + (kept ? " on" : "") + '" data-do="keep" data-value="' + text(value) + '" aria-label="' + (kept ? "Remove from this phone" : "Keep on this phone") + '" title="' + (kept ? "Remove from this phone" : "Keep on this phone") + '">' + icon("download", 16) + "</button>"
+            + '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to the top") + '" title="' + (pinned ? "Unpin" : "Pin to the top") + '">' + icon("pin", 16) + "</button>" : "") + "</div>";
+}
+// A project kept on this phone for when there is no connection (a copy of it made now), or no longer.
+async function keepOnPhone(path)
+{
+    if (off.has(path)) { await off.drop(path); toast("No longer kept on this phone"); showFiles(); return; }
+    toast("Keeping it on this phone\u2026");
+    try { const got = await dbx.read(path); await off.keep(path, got.bytes, got.rev); toast("Kept on this phone: it opens without a connection"); }
+    catch (e) { toast(e instanceof dbx.Offline ? "No connection: it can be kept once there is one" : e instanceof dbx.SignedOut || /^Couldn't|^That file/.test(e.message) ? e.message : "This phone hasn't room to keep it"); }
+    if (!project) showFiles();
 }
 // When it was saved, briefly: the time today, the day this year, else the day and year.
 function when(iso)
@@ -825,6 +853,8 @@ function editable(v)
     };
     v.overlay = ctx => { drawPicked(v, ctx); drawSelection(v, ctx); };
     v.grab = (at, e) => pen ? drawPress(v, at, e) : grabPicked(v, at);
+    v.paintOn = () => pen && !project.base.doc.readOnly ? project.drawOn || null : null;   // (the drawing drawn on: shown from the graphics chip)
+    v.overlayNeeded = () => !!(picked || paintSel || selecting);
     tools(v);   // (something copied: ready to paste)
 }
 function pickedBox()
@@ -1042,7 +1072,7 @@ function paste(v)
 let pen = null;          // drawing: { kind: the tool in use, slots: the tool each of the bar's slots shows, size (on the screen), color }; null when not
 let sketchId = null;     // the strokes on a saved drawing since it was last saved: kept together under this id
 let paintSel = null;     // what is selected of the drawing being drawn on (Drawing Select): { pts: its outline, on the canvas }
-const SIZE = { least: 1, most: 80, start: 8 };   // the brush's size, on the screen
+const SIZE = { least: 1, most: 120, start: 8 };   // the brush's size, on the canvas (as Board's: the same however far in it is zoomed)
 // The palette to begin with (each phone keeps its own, changed as it likes): grays, then round the colors.
 const PALETTE = ["#151616", "#FFFFFF", "#7C807E", "#C9CCCA", "#E05A47", "#F28C38", "#F2C53A", "#4FB477", "#2FA3A0", "#3F8FD8", "#8E5BD6", "#E45FA8", "#8B5E3C", "#F1D7B0"];
 // The drawing bar's three slots, each holding a few tools: a tap uses the one it shows, a tap again (or a press and
@@ -1125,7 +1155,13 @@ function dot(size, color, opacity) { const d = Math.max(5, Math.min(24, 4 + size
 
 let popOf = null, popEl = null;
 function closePop() { if (popEl) popEl.remove(); popEl = null; if (popOf) popOf.classList.remove("popped"); popOf = null; document.removeEventListener("pointerdown", popAway, true); }
-function popAway(e) { if (popEl && !popEl.contains(e.target) && !(popOf && popOf.contains(e.target))) closePop(); }
+// (a tap away puts it away; one on the canvas does only that, and lays no paint)
+function popAway(e)
+{
+    if (!popEl || popEl.contains(e.target) || (popOf && popOf.contains(e.target))) return;
+    closePop();
+    if (e.target.closest && e.target.closest(".stage")) { e.stopPropagation(); e.preventDefault(); }
+}
 function popFrom(btn, html, wire)
 {
     closePop();
@@ -1330,7 +1366,7 @@ function drawPress(v, at, e)
 // second finger (to pan or zoom) takes it back.
 function strokeFrom(v, at, e)
 {
-    const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: Math.round(pen.size / v.cam.s * 100) / 100, pts: [], ...(pen.opacity < 1 ? { opacity: pen.opacity } : {}) });
+    const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: pen.size, pts: [], ...(pen.opacity < 1 ? { opacity: pen.opacity } : {}) });
     const pts = s.stroke.pts;
     // Each position eased toward, as Board's brush does at its Smoothing setting (0.35, its own to start with), which
     // irons out a finger's wobble; the line is drawn as curves through the eased points (render.js, drawStrokes).
@@ -1376,7 +1412,7 @@ function strokeFrom(v, at, e)
                 for (const one of guess) { const q = v.at(one); gx += (q.x - gx) * (1 - lag); gy += (q.y - gy) * (1 - lag); }
                 keep(gx, gy, ep, wet.ahead);
             }
-            v.redraw();
+            v.redrawWet();   // (only the stroke: on the graphics chip, where it shows the drawing)
         },
         end()
         {
@@ -1398,8 +1434,7 @@ function strokeFrom(v, at, e)
 // The Eyedropper: the color drawn where it is pressed (as the screen shows it), to paint with; back to the brush.
 function dropperAt(v, at)
 {
-    const px = v.ctx.getImageData(Math.round(at.x * v.dpr), Math.round(at.y * v.dpr), 1, 1).data;
-    if (px[3] === 0) { toast("Nothing there to take a color from"); return; }
+    const px = v.snapshot().getContext("2d").getImageData(Math.round(at.x * v.dpr), Math.round(at.y * v.dpr), 1, 1).data;   // (as it shows, the drawing on the graphics chip too)
     pen.color = "#" + [px[0], px[1], px[2]].map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase();
     pen.kind = pen.slots.brush;
     keepPen(); tools(v);
@@ -1413,19 +1448,22 @@ function fillAt(v, at)
 {
     const W = v.canvas.width, H = v.canvas.height, sx = Math.round(at.x * v.dpr), sy = Math.round(at.y * v.dpr);
     if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
-    const px = v.ctx.getImageData(0, 0, W, H).data, at0 = (sy * W + sx) * 4;
+    const px = v.snapshot().getContext("2d").getImageData(0, 0, W, H).data, at0 = (sy * W + sx) * 4;   // (as it shows, the drawing on the graphics chip too)
     const r0 = px[at0], g0 = px[at0 + 1], b0 = px[at0 + 2], tol = 48;
     const like = i => Math.abs(px[i] - r0) + Math.abs(px[i + 1] - g0) + Math.abs(px[i + 2] - b0) <= tol;
-    const inside = new Uint8Array(W * H), todo = [sy * W + sx];
-    let x0 = sx, y0 = sy, x1 = sx, y1 = sy;
-    while (todo.length)
+    // (each pixel put on the stack once at most: marked as it is, so the stack is never more than the view's pixels)
+    const inside = new Uint8Array(W * H), queued = new Uint8Array(W * H), todo = new Int32Array(W * H);
+    let top = 0, x0 = sx, y0 = sy, x1 = sx, y1 = sy;
+    const push = i => { if (!queued[i]) { queued[i] = 1; todo[top++] = i; } };
+    push(sy * W + sx);
+    while (top)
     {
-        const i = todo.pop();
-        if (inside[i] || !like(i * 4)) continue;
+        const i = todo[--top];
+        if (!like(i * 4)) continue;
         inside[i] = 1;
         const x = i % W, y = (i / W) | 0;
         if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
-        if (x > 0) todo.push(i - 1); if (x < W - 1) todo.push(i + 1); if (y > 0) todo.push(i - W); if (y < H - 1) todo.push(i + W);
+        if (x > 0) push(i - 1); if (x < W - 1) push(i + 1); if (y > 0) push(i - W); if (y < H - 1) push(i + W);
     }
     // (grown a pixel, so it reaches under the soft edge of what bounds it)
     x0 = Math.max(0, x0 - 1); y0 = Math.max(0, y0 - 1); x1 = Math.min(W - 1, x1 + 1); y1 = Math.min(H - 1, y1 + 1);
@@ -1585,10 +1623,12 @@ async function paintTiles(frame, draw)
             const px = g.getImageData(0, 0, T, T).data;
             let any = false;
             for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
-            if (!any) continue;
+            if (!any) { cv.width = cv.height = 0; continue; }
             const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
+            cv.width = cv.height = 0;   // (let go at once: a phone's browser allows only so much canvas)
             tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
         }
+    if (all) all.width = all.height = 0;
     return tiles;
 }
 // A saved drawing painted again: its tiles read back, then its strokes since it was saved, then any drawings merged
@@ -2044,12 +2084,18 @@ function toast(words)
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => t.classList.remove("on"), 2200);
 }
+// The canvas tab's view put away (another tab shown, or the project left): what was picked on it let go, and drawing on
+// it ended (saved, as Done saves). A board open over the tabs keeps its own.
 function closeViewers()
 {
-    picked = null;
-    pen = null;
+    if (picked && picked.viewer !== boardView) picked = null;
+    if (pen && !(boardView && open && open.kind === "board"))
+    {
+        pen = null; paintSel = null; closePop();
+        if (project && project.steps.length && !project.local) { clearTimeout(saveTimer); save(); }
+    }
     if (canvasView && project) remember("canopy.cam." + project.path, canvasView.cam);
-    if (canvasView) canvasView.canvas.remove();
+    if (canvasView) canvasView.dispose();
     canvasView = null;
 }
 
@@ -2059,7 +2105,7 @@ function showOver()
 {
     const over = app.querySelector("#over");
     if (!over) return;
-    if (!open) { if (picked && picked.viewer === boardView) picked = null; over.innerHTML = ""; over.className = ""; boardView = null; return; }
+    if (!open) { if (picked && picked.viewer === boardView) picked = null; over.innerHTML = ""; over.className = ""; if (boardView) boardView.dispose(); boardView = null; return; }
     if (open.kind === "list" && !current()) { open = null; return showOver(); }
     over.className = "open " + open.kind;
     over.onclick = e => { if (e.target === over) closeOver(); };   // (round a list opened on a wide screen: back to the others)
@@ -2206,6 +2252,7 @@ function showBoard(over)
     {
         over.innerHTML = '<div class="board-wrap" data-id="' + text(b.id) + '"><div class="head"></div><div class="stage fade-in"></div></div>';
         wrap = over.querySelector(".board-wrap");
+        if (boardView) boardView.dispose();
         boardView = new Viewer(wrap.querySelector(".stage"), () => project && project.scene, pictureGetter(), null);
         editable(boardView);
         boardView.onFitAll = () => boardView.fit(b, 0.04, true);
@@ -2214,7 +2261,7 @@ function showBoard(over)
     }
     else boardView.redraw();
     const head = wrap.querySelector(".head");
-    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + undoButtons() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("draw", "draw", "Draw") + iconButton("photo", "photo", "Add a photo")));
+    head.innerHTML = bar(b.name, iconButton("close", "back", "Back"), statusHtml() + undoButtons() + iconButton("fitboard", "fit", "Fit the board") + (project.base.doc.readOnly ? "" : iconButton("draw", "brush", pen ? "Done drawing" : "Draw") + iconButton("photo", "photo", "Add a photo")));
     wire(head);
 }
 
@@ -2279,8 +2326,15 @@ function undoRedo(redo)
     const doing = from.pop();
     selectionWith(doing);
     const again = run(doing);
-    // (strokes on a drawing that has since been saved: painted into it, so there is nothing left here to take back)
-    if (!again.length && doing.every(x => x.t === "unstroke" || x.t === "stroke")) toast("Saved strokes can't be undone");
+    if (!again.length)
+    {
+        // Nothing left to take back or do again (strokes on a drawing since saved: painted into it): the steps left
+        // out, and nothing saved for them.
+        project.steps.splice(project.steps.length - doing.length, doing.length);
+        refreshView(); undoable(); redrawViewers();
+        if (doing.every(x => x.t === "unstroke" || x.t === "stroke")) toast("Saved strokes can't be undone");
+        return;
+    }
     if (again.length) to.push(again);
     if (picked) picked.ids = picked.ids.filter(id => project.scene.items.some(o => o.id === id));
     if (picked && !picked.ids.length) picked = null;
@@ -2307,13 +2361,22 @@ function changed()
 // every stroke (a long run of strokes is a lot to write), and at once when the page is put away.
 let keepTimer = null;
 function keepSteps() { clearTimeout(keepTimer); keepTimer = setTimeout(keepNow, 1500); }
-function keepNow() { clearTimeout(keepTimer); keepTimer = null; if (project && !project.local) remember("canopy.steps." + project.path, project.steps.length ? project.steps : null); }
+let keepWarned = false;
+function keepNow()
+{
+    clearTimeout(keepTimer); keepTimer = null;
+    if (!project || project.local) return;
+    off.keepSteps(project.path, project.steps.slice()).then(ok => { if (!ok && !keepWarned) { keepWarned = true; toast("This phone's storage is full: changes not yet saved aren't kept on it"); } });
+}
 addEventListener("pagehide", keepNow);
 document.addEventListener("visibilitychange", () => { if (document.hidden) keepNow(); });
 
+let saveAgain = false, retryIn = 8000;
 async function save()
 {
-    if (!project || project.local || saving || project.steps.length === 0) return;
+    if (!project || project.local || project.steps.length === 0) return;
+    if (saving) { saveAgain = true; return; }   // (again once the one under way is done: it may be another project's)
+    if (navigator.onLine === false) { setState("waiting", "no connection; kept on this phone"); return; }   // (saved once there is one: the "online" event)
     saving = true;
     const p = project;
     setState("saving");
@@ -2325,24 +2388,26 @@ async function save()
             const n = p.steps.length;
             const upto = cnpy.apply(p.base.doc, p.steps.slice(0, n));
             const bytes = await cnpy.save(p.base.doc, upto, p.pictures, await paintSketches(upto, p.base.doc));
-            try
-            {
-                const rev = await dbx.write(p.path, bytes, p.base.rev);
-                await rebase(p, bytes, rev);
-                p.steps = p.steps.slice(n);
-                break;
-            }
+            let rev = null;
+            try { rev = await dbx.write(p.path, bytes, p.base.rev); }
             catch (e)
             {
                 if (!(e instanceof dbx.Conflict)) throw e;
-                // Someone saved it meanwhile: theirs read, and these steps done again on top of it.
+                // Someone saved it meanwhile: theirs read, and these steps done again on top of it. Unless it is this
+                // very save, landed before (its answer lost on the way back): then it is saved.
                 const got = await dbx.read(p.path);
-                await rebase(p, got.bytes, got.rev);
+                if (sameBytes(got.bytes, bytes)) rev = got.rev;
+                else { await rebase(p, got.bytes, got.rev); continue; }
             }
+            await rebase(p, bytes, rev);
+            if (off.has(p.path)) off.keep(p.path, bytes, rev).catch(() => { });
+            p.steps = p.steps.slice(n);
+            off.keepSteps(p.path, p.steps.slice());   // (at once, whichever project is open now: none of these done again)
+            break;
         }
+        retryIn = 8000;
         if (p !== project) return;
         refreshView();
-        keepSteps();
         forgetPhotos(p);
         problem = "";
         setState(project.steps.length ? "pending" : "saved");
@@ -2352,12 +2417,20 @@ async function save()
     catch (e)
     {
         if (e instanceof dbx.SignedOut) return failed(e);
-        setState("waiting", e.message);   // (offline, say: kept here, and tried again)
+        if (p !== project) return;
+        setState("waiting", e instanceof dbx.Offline ? "no connection; kept on this phone" : e.message);   // (kept here, and tried again)
         clearTimeout(saveTimer);
-        saveTimer = setTimeout(save, 8000);
+        // (tried again a while later, and less often each time; not while drawing, nor with no connection at all)
+        if (!pen && !(e instanceof dbx.Offline && navigator.onLine === false)) saveTimer = setTimeout(save, retryIn);
+        retryIn = Math.min(retryIn * 2, 120000);
     }
-    finally { saving = false; }
+    finally
+    {
+        saving = false;
+        if (saveAgain) { saveAgain = false; if (project && project.steps.length && !pen) setTimeout(save, 0); }
+    }
 }
+function sameBytes(a, b) { if (!a || !b || a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
 async function rebase(p, bytes, rev)
 {
     p.base = { doc: await cnpy.open(bytes), rev };
@@ -2382,6 +2455,7 @@ async function catchUp(quiet)
         const got = await dbx.read(p.path);
         if (p !== project || editing || sheetOpen() || project.steps.length) return;
         await rebase(p, got.bytes, got.rev);
+        if (off.has(p.path)) off.keep(p.path, got.bytes, got.rev).catch(() => { });
         refreshView();
         if (open && open.kind === "list" && !current()) open = null;
         show();
@@ -2392,7 +2466,7 @@ async function catchUp(quiet)
 }
 setInterval(() => catchUp(true), 20000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { catchUp(true); save(); } });
-window.addEventListener("online", () => save());
+window.addEventListener("online", () => { if (!pen) save(); });   // (drawing: saved at Done)
 
 // ---- photos: kept on the phone (in its own storage) until they are saved into the file ----
 
@@ -2487,16 +2561,28 @@ async function newProject()
 
 // ---- opening ----
 
+let opening = 0;   // (which opening is the latest: one overtaken by another, or by going back, is let go)
 async function openPath(path)
 {
+    const me = ++opening;
     problem = "";
     keepNow();   // (the last project's steps not yet kept: kept before another is opened)
     app.innerHTML = bar(fileName(path), "", "") + '<main class="page"><div class="empty">Opening…</div></main>';
     try
     {
-        const got = await dbx.read(path);
+        // From Dropbox (and the copy kept on this phone made new, if it keeps one); with no connection, that copy.
+        let got;
+        try { got = await dbx.read(path); if (off.has(path)) off.keep(path, got.bytes, got.rev).catch(() => { }); }
+        catch (e)
+        {
+            if (!(e instanceof dbx.Offline)) throw e;
+            got = await off.copy(path);
+            if (!got) throw new Error("No connection, and this project isn't kept on this phone.");
+            toast("No connection: opened the copy on this phone");
+        }
         const doc = await cnpy.open(got.bytes);
-        const waiting = remembered("canopy.steps." + path, null) || [];   // changes made here that never got saved: done again
+        const waiting = (await off.steps(path)) || [];   // changes made here that never got saved: done again
+        if (me !== opening) return;
         if (project) render.forget(project.cache);
         project = { path, name: fileName(path), local: false, base: { doc, rev: got.rev }, steps: waiting, pictures: new Map(), cache: render.cache() };
         undos = []; redos = [];
@@ -3087,6 +3173,7 @@ function act(what, value, ev, el)
             showFiles();
             break;
         }
+        case "keep": keepOnPhone(value); break;
         case "photo": photoMenu(); break;
         case "draw": drawMode(); break;
         case "addmenu": addMenu(el); break;
@@ -3194,7 +3281,7 @@ if (standalone)
 // ---- a newer version published: said so, and taken on a tap (each file fetched fresh first, so the phone doesn't
 // keep any of the old ones) ----
 
-const FILES = ["index.html", "app.css", "js/app.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js"];
+const FILES = ["index.html", "app.css", "sw.js", "js/app.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/gl.js", "js/offline.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js"];
 let newer = null;
 async function checkVersion()
 {
@@ -3208,6 +3295,7 @@ async function checkVersion()
         {
             note.textContent = "Updating\u2026";
             await Promise.all(FILES.map(f => fetch(f, { cache: "reload" }).catch(() => { })));
+            try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch (x) { }
             location.reload();
         });
         document.body.appendChild(note);
@@ -3237,6 +3325,8 @@ if (location.hostname === "localhost") window.__stats = () => render.stats;
 
 (async function start()
 {
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) { try { navigator.serviceWorker.register("sw.js"); } catch (e) { } }
+    await off.all();
     await freshKey();
     try { await dbx.finish(); }
     catch (e) { problem = e.message; }

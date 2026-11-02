@@ -405,22 +405,29 @@ export async function open(bytes)
 export async function save(doc, view, pictures, drawn)
 {
     const text = write(doc, view, drawn);
-    const gone = [];   // a drawing painted again: its old tiles left out of the file (the new are in a folder of their own)
+    // (every file put in or taken out kept track of, and put back as it was once the bytes are made: this copy of the
+    // file is read afresh once the save lands, and one that doesn't land must leave nothing of it behind)
+    const was = new Map();
+    const mark = path => { if (!was.has(path)) was.set(path, doc.zip.files[path]); };
+    const put = (path, data, compression) => { const dir = path.slice(0, path.lastIndexOf("/") + 1); if (dir) mark(dir); mark(path); doc.zip.file(path, data, { compression }); };
     for (const k of drawn || [])
     {
-        // (and those of any drawing merged into it; but not a folder a copy of one still uses)
+        // A drawing painted again: its old tiles left out of the file (the new are in a folder of their own); and
+        // those of any drawing merged into it; but not a folder a copy of one still uses.
         for (const folder of k.base ? [k.old].concat(k.drop || []) : [])
         {
             if (!folder.endsWith("/") || doc.items.some(o => o.file === folder && o.id !== k.id && !view.removed.has(o.id) && !view.deleted.has(o.id))) continue;
-            for (const path of Object.keys(doc.zip.files)) if (path.startsWith(folder)) { gone.push([path, doc.zip.files[path]]); delete doc.zip.files[path]; }
+            for (const path of Object.keys(doc.zip.files)) if (path.startsWith(folder)) { mark(path); delete doc.zip.files[path]; }
         }
-        for (const [name, bytes] of k.tiles) doc.zip.file((k.base ? k.folder : k.id + "/") + name, bytes, { compression: "STORE" });
+        // (a drawing made here: any tiles of an earlier try at saving it gone first, so only these are in its folder)
+        if (!k.base) for (const path of Object.keys(doc.zip.files)) if (path.startsWith(k.id + "/")) { mark(path); delete doc.zip.files[path]; }
+        for (const [name, bytes] of k.tiles) put((k.base ? k.folder : k.id + "/") + name, bytes, "STORE");
     }
-    doc.zip.file("layers.txt", (doc.bom ? "\uFEFF" : "") + text, { compression: "DEFLATE" });
-    for (const p of view.photos) if (!doc.zip.file(p.file) && pictures.has(p.file)) doc.zip.file(p.file, pictures.get(p.file), { compression: "STORE" });
-    for (const r of view.restored) if (r.item.kind === "image" && !doc.zip.file(r.item.file) && pictures.has(r.item.file)) doc.zip.file(r.item.file, pictures.get(r.item.file), { compression: "STORE" });   // (pasted from another project)
+    put("layers.txt", (doc.bom ? "\uFEFF" : "") + text, "DEFLATE");
+    for (const p of view.photos) if (!doc.zip.file(p.file) && pictures.has(p.file)) put(p.file, pictures.get(p.file), "STORE");
+    for (const r of view.restored) if (r.item.kind === "image" && !doc.zip.file(r.item.file) && pictures.has(r.item.file)) put(r.item.file, pictures.get(r.item.file), "STORE");   // (pasted from another project)
     try { return await doc.zip.generateAsync({ type: "uint8array" }); }
-    finally { for (const [path, f] of gone) doc.zip.files[path] = f; }   // (kept here until the file saved is read back: it still shows them)
+    finally { for (const [path, f] of was) { if (f) doc.zip.files[path] = f; else delete doc.zip.files[path]; } }
 }
 
 // ---- changes ----
@@ -451,9 +458,10 @@ export function apply(doc, steps)
             if (s.t === "stroke")
             {
                 if (!k) sketches.push(k = { id: s.id, base: s.base || null, name: s.name, layer: s.layer, author: s.author, strokes: [] });   // ("base": a saved drawing these go onto)
-                if (!k.strokes.some(o => o.sid === s.stroke.sid)) k.strokes.push(s.stroke);
+                if (!k.sids) Object.defineProperty(k, "sids", { value: new Set(), writable: true });   // (its strokes' ids: a stroke not put in twice, quickly however many)
+                if (!k.sids.has(s.stroke.sid)) { k.sids.add(s.stroke.sid); k.strokes.push(s.stroke); }
             }
-            else if (k) { k.strokes = k.strokes.filter(o => o.sid !== s.sid); if (k.strokes.length === 0) sketches.splice(sketches.indexOf(k), 1); }
+            else if (k) { k.strokes = k.strokes.filter(o => o.sid !== s.sid); if (k.sids) k.sids.delete(s.sid); if (k.strokes.length === 0) sketches.splice(sketches.indexOf(k), 1); }
             continue;
         }
         if (s.t === "place" || s.t === "delobj")

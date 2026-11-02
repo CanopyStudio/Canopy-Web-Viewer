@@ -382,7 +382,7 @@ export function hidden(sc, o)
     if (!o.group || hides.size === 0) return false;
     return o.group.split("/").some(id => hides.has(id));
 }
-function fade(doc, o) { let a = o.opacity === undefined ? 1 : o.opacity; if (o.group && doc.fades.size) for (const id of o.group.split("/")) if (doc.fades.has(id)) a *= doc.fades.get(id); return a; }
+export function fade(doc, o) { let a = o.opacity === undefined ? 1 : o.opacity; if (o.group && doc.fades.size) for (const id of o.group.split("/")) if (doc.fades.has(id)) a *= doc.fades.get(id); return a; }
 
 // Where an object is (its own box, before any turn), and its box on the canvas with any turn.
 export function box(o, ctx)
@@ -402,9 +402,8 @@ export function outer(o, ctx)
 {
     const b = box(o, ctx);
     if (!o.angle && !o.shear) return b;
-    const cx = b.x + b.w / 2, cy = b.y + b.h / 2, m = placing(o, b), pts = [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]].map(([x, y]) => m.transformPoint(new DOMPoint(x, y)));
+    const m = placing(o, b), pts = [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]].map(([x, y]) => m.transformPoint(new DOMPoint(x, y)));
     const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-    void cx; void cy;
     return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
 }
 function placing(o, b)   // slanted, then turned, about the box's middle
@@ -600,7 +599,7 @@ function drawWet(g, st, m)
     paint(c);
     if (st.kind === "flat")
     {
-        if (solid > L.upto) { const path = new Path2D(); L.carry = flatStamps(path, st, L.upto, solid, L.carry); c.fill(path, "nonzero"); L.upto = solid; }
+        if (solid > L.upto) { const path = new Path2D(); L.carry = flatStamps(tipInto(path), st, L.upto, solid, L.carry); c.fill(path, "nonzero"); L.upto = solid; }
     }
     else if (solid >= 3 && solid - 1 > L.upto) { inkPieces(c, st, p.slice(0, (solid - 1) * 3 + 3), Math.max(1, L.upto), solid - 1); L.upto = solid - 1; }   // (settled: all but the last piece)
     const alpha = st.opacity === undefined ? 1 : st.opacity, erase = st.kind === "erase";
@@ -614,7 +613,7 @@ function drawWet(g, st, m)
     }
     into.save(); into.setTransform(1, 0, 0, 1, 0, 0); into.globalAlpha = 1; into.globalCompositeOperation = "source-over"; into.drawImage(wc, 0, 0); into.restore();
     into.save(); paint(into);
-    if (st.kind === "flat") { if (all > solid) { const path = new Path2D(); flatStamps(path, st, solid, all, L.carry); into.fill(path, "nonzero"); } }
+    if (st.kind === "flat") { if (all > solid) { const path = new Path2D(); flatStamps(tipInto(path), st, solid, all, L.carry); into.fill(path, "nonzero"); } }
     else inkPieces(into, st, p, Math.max(1, L.upto), all);
     into.restore();
     if (into !== g) { g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = alpha; g.globalCompositeOperation = erase ? "destination-out" : "source-over"; g.drawImage(wetMix, 0, 0); g.restore(); }
@@ -624,9 +623,9 @@ function drawWet(g, st, m)
 // broken into lobes with notches between and a fine wobble over that), held level, stamped close together all along
 // the stroke, so its ends and sides come out roughened as Board's do; as wide as it is pressed. The stamps made so far
 // are kept with the stroke, so a long one isn't stamped over again each time it is drawn.
-const FLAT = { aspect: 0.42, corner: 0.62, lobes: 13, depth: 0.214, wobble: 0.029, seed: 3 };
+export const FLAT = { aspect: 0.42, corner: 0.62, lobes: 13, depth: 0.214, wobble: 0.029, seed: 3 };
 let flatTip = null;   // its outline, across -0.5 to 0.5 of the tip's width and of its thickness
-function tipOutline()
+export function tipOutline()
 {
     if (flatTip) return flatTip;
     const n = 96, { aspect, corner, lobes, depth, wobble } = FLAT;
@@ -670,35 +669,40 @@ function tipOutline()
     return flatTip = pts;
 }
 const stamped = new WeakMap();   // a Flat stroke: { path, upto (its points stamped), carry (along since the last stamp) }
-// The Flat's tip stamped into "path" a small share of its width apart, along points "from" to "to" (carrying on "c"
-// along from the last stamp): what is left over.
-function flatStamps(path, st, from, to, c)
+// The Flat's tip stamped a small share of its width apart, along points "from" to "to" (carrying on "c" along from
+// the last stamp): each stamp "put" (its middle and width), and what is left over returned.
+export function flatStamps(put, st, from, to, c)
 {
-    const p = st.pts, tip = tipOutline(), width = i => st.size * Math.max(0.35, p[i * 3 + 2]);
-    const stamp = (x, y, w) =>
+    const p = st.pts, width = i => st.size * Math.max(0.35, p[i * 3 + 2]);
+    for (let i = from; i < to; i++)
+    {
+        if (i === 0) { put(p[0], p[1], width(0)); continue; }
+        const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], x1 = p[i * 3], y1 = p[i * 3 + 1], d = Math.hypot(x1 - x0, y1 - y0);
+        const w0 = width(i - 1), w1 = width(i), step = Math.max(0.5, Math.min(w0, w1) * 0.06);
+        let t = step - c;
+        while (t <= d) { const u = d ? t / d : 1; put(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, w0 + (w1 - w0) * u); t += step; }
+        c = d - (t - step);
+    }
+    return c;
+}
+// The tip's outline at (x, y), "w" wide, into "path".
+function tipInto(path)
+{
+    const tip = tipOutline();
+    return (x, y, w) =>
     {
         const h = w * FLAT.aspect;
         path.moveTo(x + tip[0] * w, y + tip[1] * h);
         for (let k = 2; k < tip.length; k += 2) path.lineTo(x + tip[k] * w, y + tip[k + 1] * h);
         path.closePath();
     };
-    for (let i = from; i < to; i++)
-    {
-        if (i === 0) { stamp(p[0], p[1], width(0)); continue; }
-        const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], x1 = p[i * 3], y1 = p[i * 3 + 1], d = Math.hypot(x1 - x0, y1 - y0);
-        const w0 = width(i - 1), w1 = width(i), step = Math.max(0.5, Math.min(w0, w1) * 0.06);
-        let t = step - c;
-        while (t <= d) { const u = d ? t / d : 1; stamp(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, w0 + (w1 - w0) * u); t += step; }
-        c = d - (t - step);
-    }
-    return c;
 }
 function flatInto(g, st)
 {
     const n = st.pts.length / 3;
     let kept = stamped.get(st);
     if (!kept || kept.upto > n || kept.size !== st.size) { kept = { path: new Path2D(), upto: 0, carry: 0, size: st.size }; stamped.set(st, kept); }
-    if (n > kept.upto) { kept.carry = flatStamps(kept.path, st, kept.upto, n, kept.carry); kept.upto = n; }
+    if (n > kept.upto) { kept.carry = flatStamps(tipInto(kept.path), st, kept.upto, n, kept.carry); kept.upto = n; }
     g.fill(kept.path, "nonzero");
 }
 // A fill (a picture of what it filled, made when it was tapped), a selection rubbed out ("clear"), or one moved ("move":
@@ -745,35 +749,56 @@ function drawEdit(g, st)
     g.restore();
 }
 let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then laid on the view)
-let dry = null;            // the drawing a stroke is being drawn on, without that stroke: { canvas, key (what it was drawn as) }
-// A drawing with strokes not yet saved, kept drawn on a canvas of its own (in canvas units, as sharp as the view needs,
-// a power of two), so moving round the canvas or zooming lays it on rather than drawing every stroke again each time.
-// Made again when its strokes change, or when the view is still and needs it sharper; while the view moves, the one
-// there is used whatever its sharpness. False when it is too big to keep (then drawn as it is).
-const keptDrawings = new Map();   // by drawing: { canvas, key, k (its pixels to a canvas unit), x, y, w, h }
-function keptDrawing(ctx, o, b, doc, get, m)
+// A drawing with strokes not yet saved, kept drawn on a canvas of its own (in canvas units, over a little more than it
+// reaches, so strokes made next fit on it too), laid on as the canvas is moved round or zoomed. A new stroke is drawn
+// onto it, not the whole drawing again; it is made again only when a stroke goes (an undo), one falls outside it, or
+// the view, still, needs it sharper than it is. Its first "upto" strokes (a stroke under way left off). False when
+// the view needs it sharper than it can be kept (then drawn as it is).
+const keptDrawings = new Map();   // by drawing: { canvas, k (its pixels to a canvas unit), x, y, w, h, n (strokes on it), last, merged, loaded }
+function keptDrawing(ctx, o, b, doc, get, m, upto)
 {
-    const r = o.reach || b, need = Math.hypot(m.a, m.b);
-    if (!(r.w > 0) || !(r.h > 0) || !(need > 0)) return false;
-    const strokes = o.strokes || [], key = [strokes.length, strokes.length ? strokes[strokes.length - 1].sid : "", (o.merged || []).length, r.x, r.y, r.w, r.h, stats.decoded].join();
-    const most = Math.min(4096 / Math.max(r.w, r.h), Math.sqrt(8e6 / (r.w * r.h)));
-    let k = Math.min(Math.pow(2, Math.ceil(Math.log2(need))), most);
-    let c = keptDrawings.get(o.id);
+    const r0 = o.reach || b, need = Math.hypot(m.a, m.b);
+    if (!(r0.w > 0) || !(r0.h > 0) || !(need > 0)) return false;
+    const strokes = (o.strokes || []).slice(0, upto), merged = (o.merged || []).length, loaded = tilesLoaded(o, doc, get);
     const moving = smooth === "low";
-    if (!c || c.key !== key || (!moving && c.k < Math.min(need, most) * 0.99))
+    let c = keptDrawings.get(o.id);
+    const inside = st => { const e = sketchItem({ strokes: [st] }); return e.x >= c.x && e.y >= c.y && e.x + e.w <= c.x + c.w && e.y + e.h <= c.y + c.h; };
+    const same = c && c.merged === merged && c.loaded === loaded && c.n <= strokes.length && (c.n === 0 || (strokes[c.n - 1] && strokes[c.n - 1].sid === c.last)) && strokes.slice(c.n).every(inside);
+    const sharp = c && (moving || c.k >= Math.min(need, c.most) * 0.99);
+    if (!same || !sharp)
     {
-        if (k < need * 0.5 && !moving) return false;   // (too big to keep at the size it is shown: drawn as it is)
+        const pad = Math.max(r0.w, r0.h) * 0.35 + 200 / need, r = { x: r0.x - pad, y: r0.y - pad, w: r0.w + 2 * pad, h: r0.h + 2 * pad };
+        const most = Math.min(4096 / Math.max(r.w, r.h), Math.sqrt(8e6 / (r.w * r.h)));
+        if (most < need * 0.5 && !moving) return false;   // (too big to keep as sharp as it is shown: drawn as it is)
+        const k = Math.min(most, need * 1.25);   // (a little sharper than shown, to be zoomed into a little)
         if (!c) { c = { canvas: document.createElement("canvas") }; keptDrawings.set(o.id, c); if (keptDrawings.size > 2) keptDrawings.delete(keptDrawings.keys().next().value); }
         const W = Math.max(1, Math.ceil(r.w * k)), H = Math.max(1, Math.ceil(r.h * k));
         c.canvas.width = W; c.canvas.height = H;
         const d = c.canvas.getContext("2d");
         d.setTransform(k, 0, 0, k, -r.x * k, -r.y * k);
         drawingInto(d, o, b, doc, get, strokes.length);
-        Object.assign(c, { key, k, x: r.x, y: r.y, w: W / k, h: H / k });
+        Object.assign(c, { k, most, x: r.x, y: r.y, w: W / k, h: H / k, n: strokes.length, merged, loaded });
     }
-    ctx.imageSmoothingQuality = smooth;
+    else if (c.n < strokes.length)
+    {
+        const d = c.canvas.getContext("2d");
+        d.setTransform(c.k, 0, 0, c.k, -c.x * c.k, -c.y * c.k); d.globalAlpha = 1; d.globalCompositeOperation = "source-over";
+        drawStrokes(d, strokes.slice(c.n));   // (only the new ones)
+        c.n = strokes.length;
+    }
+    c.last = strokes.length ? strokes[strokes.length - 1].sid : "";
+    ctx.imageSmoothingQuality = "low";   // (near its own size: the quick way is as good)
     ctx.drawImage(c.canvas, c.x, c.y, c.w, c.h);
     return true;
+}
+// How many of a drawing's tiles (and those of any merged into it) have been read so far: a drawing kept before they
+// all were is made again as more come.
+function tilesLoaded(o, doc, get)
+{
+    if (o.kind !== "paint") return 0;
+    let n = 0;
+    for (const one of [o].concat(o.merged || [])) for (const t of tilesOf(doc, one.file)) if (get(t.file)) n++;
+    return n;
 }
 // A drawing made here, or a saved one with what is drawn on it here: its pixels, any drawing merged into it, and its
 // first "upto" strokes (onto "g", set to canvas units).
@@ -1049,12 +1074,15 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
         case "sketch":
         case "paint":
         {
-            if (o.kind === "paint" && (!(b.w > 0) || !(b.h > 0))) return;
+            if (o.kind === "paint" && (!(b.w > 0) || !(b.h > 0)) && !o.strokes) return;   // (a drawing of no size: nothing, unless strokes are drawn on it here)
             if (o.kind === "paint" && !o.strokes && !o.merged) { paintTiles(ctx, o, b, doc, get); return; }
             // Strokes not yet saved (a drawing made here, or strokes on a saved one), or a drawing merged into it: drawn
             // together on a canvas of their own the view's size (so the eraser rubs out its pixels too, and nothing
             // else), then laid on.
             const m = ctx.getTransform(), cv = ctx.canvas;
+            const strokes = o.strokes || [], wi = wet ? strokes.indexOf(wet) : -1;
+            const straight = !o.angle && !o.shear && !o.flipX && !o.flipY;
+            if (!(wi >= 0 && wi === strokes.length - 1) && straight && keptDrawing(ctx, o, b, doc, get, m, strokes.length)) return;   // (kept: laid on)
             if (!sketchCanvas) sketchCanvas = document.createElement("canvas");
             if (sketchCanvas.width !== cv.width || sketchCanvas.height !== cv.height) { sketchCanvas.width = cv.width; sketchCanvas.height = cv.height; }
             const g = sketchCanvas.getContext("2d");
@@ -1062,25 +1090,13 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
             // A stroke being drawn, the last on it: all the rest kept drawn as they are (made again only when they or
             // the view change), and only that stroke drawn on them each time, so a stroke is as quick as the first
             // however many come before it.
-            const strokes = o.strokes || [], wi = wet ? strokes.indexOf(wet) : -1;
             if (wi >= 0 && wi === strokes.length - 1)
             {
-                const key = [o.id, cv.width, cv.height, m.a, m.b, m.c, m.d, m.e, m.f, wi, strokes[wi - 1] ? strokes[wi - 1].sid : "", (o.merged || []).length, stats.decoded].join();
-                if (!dry) dry = { canvas: document.createElement("canvas"), key: "" };
-                if (dry.key !== key)
-                {
-                    if (dry.canvas.width !== cv.width || dry.canvas.height !== cv.height) { dry.canvas.width = cv.width; dry.canvas.height = cv.height; }
-                    const d = dry.canvas.getContext("2d");
-                    d.setTransform(1, 0, 0, 1, 0, 0); d.globalAlpha = 1; d.globalCompositeOperation = "source-over"; d.clearRect(0, 0, cv.width, cv.height);
-                    d.setTransform(m);
-                    drawingInto(d, o, b, doc, get, wi);
-                    dry.key = key;
-                }
-                g.drawImage(dry.canvas, 0, 0);
+                g.setTransform(m);
+                if (!(straight && keptDrawing(g, o, b, doc, get, m, wi))) drawingInto(g, o, b, doc, get, wi);
                 if (wet.kind === "pen" || wet.kind === "flat" || wet.kind === "erase") drawWet(g, wet, m);
                 else { g.setTransform(m); drawStrokes(g, [wet]); }
             }
-            else if (!o.angle && !o.shear && !o.flipX && !o.flipY && keptDrawing(ctx, o, b, doc, get, m)) return;
             else { g.setTransform(m); drawingInto(g, o, b, doc, get, strokes.length); }
             ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
             return;
@@ -1281,18 +1297,6 @@ export function objectAt(sc, x, y, slack)
     return null;
 }
 
-// The list (if any) at a point on the canvas, topmost first.
-export function listAt(sc, x, y, ctx)
-{
-    for (let i = sc.items.length - 1; i >= 0; i--)
-    {
-        const o = sc.items[i];
-        if (o.kind !== "list" || hidden(sc, o)) continue;
-        const b = box(o, ctx);
-        if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return o;
-    }
-    return null;
-}
 // What an entry's link goes to, on the canvas: a board, or an object (with the group it is in, past its layer).
 export function linked(sc, id, ctx)
 {
