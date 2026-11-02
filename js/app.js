@@ -1944,7 +1944,8 @@ function hierarchy()
                     + '<button class="hname" data-do="hpick" data-value="' + text(o.id) + '">' + icon(kindIcon(o), 18) + "<span>" + text(objectName(o)) + "</span></button>"
                     + (o.kind !== "sketch" && !shut ? '<button class="hbtn' + (own ? " set" : "") + '" data-do="hhide" data-value="' + text(o.id) + '" aria-label="' + (own ? "Show" : "Hide") + '">' + icon(own ? "eyeoff" : "eye", 18) + "</button>"
                         + '<button class="hbtn' + (lockd ? " set" : "") + '" data-do="hlock" data-value="' + text(o.id) + '" aria-label="' + (lockd ? "Unlock" : "Lock") + '">' + icon("lock", 18) + "</button>"
-                        + '<button class="hbtn" data-do="hmore" data-value="' + text(o.id) + '" aria-label="More">' + icon("more", 18) + "</button>" : "")
+                        + '<button class="hbtn" data-do="hmore" data-value="' + text(o.id) + '" aria-label="More">' + icon("more", 18) + "</button>"
+                        : o.kind === "sketch" && !shut && !project.local ? '<button class="hbtn" data-do="hmore" data-value="' + text(o.id) + '" aria-label="More">' + icon("more", 18) + "</button>" : "")   // (a drawing not saved yet: merged down, its one choice)
                     + "</div>";
             }
         }
@@ -2063,14 +2064,15 @@ function layerMenu(l)
 function objectMenu(o)
 {
     const v = boardView || canvasView, doc = project.base.doc;
-    const isPaint = o.kind === "paint" && doc.items.some(x => x.id === o.id);
+    const isPaint = (o.kind === "paint" && doc.items.some(x => x.id === o.id)) || (o.kind === "sketch" && !project.local);   // (one not saved yet: saved first, as it is merged)
     const below = isPaint ? drawingBelow(o) : null;
+    const fresh = o.kind === "sketch";
     const build = () => '<div class="ptitle mtitle"><button class="hbtn" data-do="back" aria-label="Back to the hierarchy">' + icon("back", 18) + "</button><span>" + text(kindName(o.id) + " \u00b7 " + objectName(o)) + "</span></div>"
-        + '<button class="pick" data-do="rename"><span>Rename</span></button>'
-        + '<button class="pick" data-do="duplicate"><span>Duplicate</span></button>'
+        + (fresh ? "" : '<button class="pick" data-do="rename"><span>Rename</span></button>'
+        + '<button class="pick" data-do="duplicate"><span>Duplicate</span></button>')
         + (o.kind === "paint" ? '<button class="pick" data-do="drawon"><span>Draw on this drawing</span></button>' : "")
         + (isPaint ? '<button class="pick" data-do="merge"' + (below ? "" : " disabled") + "><span>Merge down</span>" + (below ? '<span class="kind-name">into ' + text(below.name || "the drawing below") + "</span>" : '<span class="kind-name">no drawing below</span>') + "</button>" : "")
-        + '<button class="pick danger" data-do="delete"><span>Delete</span></button>';
+        + (fresh ? "" : '<button class="pick danger" data-do="delete"><span>Delete</span></button>');
     sheetUp(build, (does, value, close) =>
     {
         if (does === "back") { close(() => hierarchy()); return; }
@@ -2098,20 +2100,45 @@ function objectMenu(o)
             if (!below) return;
             const straight = x => !x.angle && !x.shear && !x.flipX && !x.flipY;
             if (!straight(o) || !straight(below)) { toast("A turned or flipped drawing can't be merged here"); return; }
-            step({ t: "merge", list: null, id: o.id, into: below.id });
-            if (project.drawOn === o.id) drawOnto(below.id);
-            close(() => { redrawViewers(); toast("Merged into " + (below.name || "the drawing below")); });
+            close(() => mergeDown(o, below));
             return;
         }
         if (does === "delete") { if (picked && picked.ids.includes(o.id)) pick(null, picked.viewer); step({ t: "delobj", list: null, ids: [o.id] }); feel.gone(); close(() => redrawViewers()); }
     });
 }
-// The saved drawing just below one, in the order they are drawn (the one a merge down goes into), or null.
+// The drawing just below one, in the order they are drawn (the one a merge down goes into), or null.
 function drawingBelow(o)
 {
-    const items = project.scene.items, doc = project.base.doc, at = items.findIndex(x => x.id === o.id);
-    for (let i = at - 1; i >= 0; i--) if (items[i].kind === "paint" && doc.items.some(x => x.id === items[i].id)) return items[i];
+    const items = project.scene.items, at = items.findIndex(x => x.id === o.id);
+    for (let i = at - 1; i >= 0; i--) if ((items[i].kind === "paint" && project.base.doc.items.some(x => x.id === items[i].id)) || (items[i].kind === "sketch" && !project.local)) return items[i];
     return null;
+}
+// Merged down, and saved at once: the two then one drawing in the file, so whatever is done to it next (a selection
+// moved, say) is done to all of it. Anything not saved yet (either of them new, or drawn on) saved first.
+async function mergeDown(o, below)
+{
+    const p = project, name = below.name || "the drawing below";
+    if (!p.local && !(await savedNow(p))) { toast("Couldn't save, so it wasn't merged. Try again once it saves"); return; }
+    const doc = p.base.doc, saved = id => doc.items.some(x => x.id === id && x.kind === "paint");
+    if (!saved(o.id) || !saved(below.id)) return;
+    step({ t: "merge", list: null, id: o.id, into: below.id });
+    if (p.drawOn === o.id) drawOnto(below.id);
+    redrawViewers();
+    toast("Merged into " + name);
+    if (!p.local) await savedNow(p);
+}
+// Everything done here saved (a save under way waited for, then another made if there is more), or false if it couldn't be.
+async function savedNow(p)
+{
+    for (let tries = 0; tries < 40 && project === p; tries++)
+    {
+        if (!p.steps.length) return true;
+        if (saving) { await new Promise(ok => setTimeout(ok, 150)); continue; }
+        clearTimeout(saveTimer);
+        await save();
+        if (p.steps.length && state === "waiting") return false;
+    }
+    return project === p && !p.steps.length;
 }
 
 // The photo button: a photo from the phone, or the image it has copied (from a web page, say).

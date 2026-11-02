@@ -776,6 +776,39 @@ let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then l
 const keptDrawings = new Map();   // by drawing: { canvas, k (its pixels to a canvas unit), x, y, w, h, n (strokes on it), last, merged, loaded }
 function keptDrawing(ctx, o, b, doc, get, m, upto)
 {
+    const strokes = (o.strokes || []).slice(0, upto), last = strokes[strokes.length - 1];
+    if (last && last.kind === "move" && !(o.merged || []).length)
+    {
+        // A selection being moved (or just moved): the drawing as it was before kept, and from it the piece lifted
+        // and the place it left, each made once; the piece then only laid on where it is now, as the finger goes.
+        const c = keepDrawn(o, b, doc, get, m, strokes.length - 1);
+        if (!c) return false;
+        let mv = c.lifted;
+        if (!mv || mv.sid !== last.sid || mv.ver !== c.ver)
+        {
+            const W = c.canvas.width, H = c.canvas.height, at = (g) => g.setTransform(c.k, 0, 0, c.k, -c.x * c.k, -c.y * c.k);
+            const piece = (mv && mv.piece) || document.createElement("canvas"), hole = (mv && mv.hole) || document.createElement("canvas");
+            piece.width = hole.width = W; piece.height = hole.height = H;
+            const pc = piece.getContext("2d"), hc = hole.getContext("2d");
+            at(pc); outlinePath(pc, last.pts); pc.clip(); pc.setTransform(1, 0, 0, 1, 0, 0); pc.drawImage(c.canvas, 0, 0);
+            hc.drawImage(c.canvas, 0, 0); at(hc); hc.globalCompositeOperation = "destination-out"; outlinePath(hc, last.pts); hc.fillStyle = "#000"; hc.fill();
+            mv = c.lifted = { sid: last.sid, ver: c.ver, piece, hole };
+        }
+        ctx.imageSmoothingQuality = "low";
+        ctx.drawImage(mv.hole, c.x, c.y, c.w, c.h);
+        ctx.drawImage(mv.piece, c.x + (last.dx || 0), c.y + (last.dy || 0), c.w, c.h);
+        return true;
+    }
+    const c = keepDrawn(o, b, doc, get, m, strokes.length);
+    if (!c) return false;
+    ctx.imageSmoothingQuality = "low";   // (near its own size: the quick way is as good)
+    ctx.drawImage(c.canvas, c.x, c.y, c.w, c.h);
+    return true;
+}
+// The kept drawing with its first "upto" strokes on it, made or brought up to date ("ver" counted up as it changes),
+// or false.
+function keepDrawn(o, b, doc, get, m, upto)
+{
     const r0 = o.reach || b, need = Math.hypot(m.a, m.b);
     if (!(r0.w > 0) || !(r0.h > 0) || !(need > 0)) return false;
     const strokes = (o.strokes || []).slice(0, upto), merged = (o.merged || []).length, loaded = tilesLoaded(o, doc, get);
@@ -790,13 +823,14 @@ function keptDrawing(ctx, o, b, doc, get, m, upto)
         const most = Math.min(4096 / Math.max(r.w, r.h), Math.sqrt(8e6 / (r.w * r.h)));
         if (most < need * 0.5 && !moving) return false;   // (too big to keep as sharp as it is shown: drawn as it is)
         const k = Math.min(most, need * 1.25);   // (a little sharper than shown, to be zoomed into a little)
-        if (!c) { c = { canvas: document.createElement("canvas") }; keptDrawings.set(o.id, c); if (keptDrawings.size > 2) keptDrawings.delete(keptDrawings.keys().next().value); }
+        if (!c) { c = { canvas: document.createElement("canvas"), ver: 0 }; keptDrawings.set(o.id, c); if (keptDrawings.size > 2) keptDrawings.delete(keptDrawings.keys().next().value); }
         const W = Math.max(1, Math.ceil(r.w * k)), H = Math.max(1, Math.ceil(r.h * k));
         c.canvas.width = W; c.canvas.height = H;
         const d = c.canvas.getContext("2d");
         d.setTransform(k, 0, 0, k, -r.x * k, -r.y * k);
         drawingInto(d, o, b, doc, get, strokes.length);
         Object.assign(c, { k, most, file: o.file, x: r.x, y: r.y, w: W / k, h: H / k, n: strokes.length, merged, loaded });
+        c.ver++;
     }
     else if (c.n < strokes.length)
     {
@@ -804,11 +838,10 @@ function keptDrawing(ctx, o, b, doc, get, m, upto)
         d.setTransform(c.k, 0, 0, c.k, -c.x * c.k, -c.y * c.k); d.globalAlpha = 1; d.globalCompositeOperation = "source-over";
         drawStrokes(d, strokes.slice(c.n));   // (only the new ones)
         c.n = strokes.length;
+        c.ver++;
     }
     c.last = strokes.length ? strokeKey(strokes[strokes.length - 1]) : "";
-    ctx.imageSmoothingQuality = "low";   // (near its own size: the quick way is as good)
-    ctx.drawImage(c.canvas, c.x, c.y, c.w, c.h);
-    return true;
+    return c;
 }
 // A stroke as it is now: its id, and what can still change while it is under way (a selection being moved: how far;
 // its points, as they come), so one kept drawn is drawn again once it has changed.
