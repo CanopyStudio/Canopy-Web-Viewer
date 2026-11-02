@@ -346,3 +346,37 @@ svg { display: block; }
 .hhandle.none { cursor: default; }
 .hdrop { position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
 .pick:disabled { opacity: .45; }
+
+/* ---- the drawing bar: three slots (a tap uses the tool shown, a hold picks another), the size and color, the
+   hierarchy, Done; spaced so a popover's tab clears the buttons either side ---- */
+.drawbar { gap: 10px; padding: 6px 8px 6px 6px; }
+.drawbar .sep { margin: 6px 0; }
+.drawbar .glyph { width: 40px; min-width: 40px; }
+.drawbar .slot { position: relative; }
+.drawbar .slot .more { position: absolute; right: 4px; bottom: 4px; width: 0; height: 0; border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .7; }
+.drawbar .done { padding: 0 10px; }
+/* a popover from one of its buttons: the card and its tab one shape (as Board's Drawing Bar draws them) */
+.pop { position: absolute; z-index: 6; }
+.pop .shape { position: absolute; inset: 0; overflow: visible; filter: drop-shadow(0 8px 16px rgba(0,0,0,.45)); pointer-events: none; }
+.pop .shape path { fill: var(--card); stroke: var(--border); stroke-width: 1; }
+.pop .card { position: absolute; left: 0; top: 0; width: max-content; max-width: min(300px, calc(100vw - 32px)); padding: 6px; }
+.pop .down { position: absolute; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid var(--muted); cursor: pointer; }
+.pop .down::after { content: ""; position: absolute; left: -18px; top: -18px; width: 36px; height: 30px; }   /* (an easy tap) */
+.pop .choices { display: flex; gap: 2px; }
+.pop .choices .glyph { width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--muted); }
+.pop .choices .glyph.on { background: var(--chosen); color: var(--heading); }
+.pop .psection { margin: 6px 6px 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.pop .sizes { width: 264px; }
+.pop .inks { width: 264px; gap: 10px; padding: 4px 6px 8px; }
+/* the canvas's + */
+.addmenu { position: fixed; z-index: 40; min-width: 190px; padding: 5px; border-radius: var(--r-pop); background: var(--card); border: 1px solid var(--border); box-shadow: var(--menu-shadow); }
+.addmenu button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 46px; padding: 0 12px; border-radius: var(--r-control); font-size: 15px; color: var(--ink); }
+.addmenu button:active { background: var(--chosen); }
+.corner .icon.on { background: var(--chosen); color: var(--heading); }
+.htitle .hhead { display: flex; gap: 4px; }
+.htitle .hhead .hbtn { color: var(--ink); }
+.mtitle { display: flex; align-items: center; gap: 6px; margin-left: -10px; }
+.mtitle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mtitle .hbtn { color: var(--ink); }
+.inkdot.custom { position: relative; display: grid; place-items: center; background: var(--button); color: var(--ink); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; }
+.inkdot.custom input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }

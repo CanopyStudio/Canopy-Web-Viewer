@@ -323,6 +323,23 @@ export function write(doc, view, drawn)
         if (at >= 0) cuts.push({ from: at, to: at + 1, put: left.length ? ["hides " + left.join(" ")] : [] });
         else if (left.length) { const b = doc.boardsLine >= 0 ? doc.boardsLine : 1; cuts.push({ from: b, to: b, put: ["hides " + left.join(" ")] }); }
     }
+    if ((view.newLayers && view.newLayers.length) || (view.zorder && view.zorder.some(z => z.layer)))
+    {
+        // Layers made here: in the "folders" line, and each an "empty" line while nothing is in it; one an object was
+        // put into here no longer empty (its line gone).
+        const into = new Set((view.zorder || []).filter(z => z.layer).map(z => z.layer.id));
+        const fresh = (view.newLayers || []).filter(l => !doc.folders.has(l.id));
+        const at = doc.lines.findIndex(l => l.startsWith("folders"));
+        if (fresh.length)
+        {
+            const all = [...new Set([...doc.folders, ...fresh.map(l => l.id)])].sort();
+            const lines2 = ["folders " + all.join(" ")].concat(fresh.filter(l => !into.has(l.id)).map(l => "empty " + l.id + " " + (l.below || "-") + " " + l.name));
+            if (at >= 0) cuts.push({ from: at, to: at + 1, put: lines2 });
+            else { const b = doc.boardsLine >= 0 ? doc.boardsLine + 1 : 1; cuts.push({ from: b, to: b, put: lines2 }); }
+        }
+        for (let i = 0; i < doc.lines.length; i++)
+            if (doc.lines[i].startsWith("empty ") && into.has(doc.lines[i].split(" ")[1])) cuts.push({ from: i, to: i + 1, put: [] });
+    }
     for (const b of doc.boards) if (view.goneBoards.has(b.id)) cuts.push({ from: b.line, to: b.line + 1, put: [] });
     if (view.order)
     {
@@ -416,7 +433,7 @@ export function apply(doc, steps)
     const relocked = new Set(), goneBoards = new Set(), restored = [];
     // The hierarchy's: objects shown or hidden, renamed, put above another (and into its layer), layers shown or hidden,
     // and drawings merged down (each into the one below, painted together as it is saved).
-    const hides = new Map(), names = new Map(), zorder = [], layerHides = new Map(), merges = [];
+    const hides = new Map(), names = new Map(), zorder = [], layerHides = new Map(), merges = [], newLayers = [];
     const sketches = [];   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
     let order = null;   // the lists' order, once set here
     const items = new Map(doc.items.map(o => [o.id, o]));
@@ -464,6 +481,8 @@ export function apply(doc, steps)
         if (s.t === "rename") { names.set(s.id, s.name); continue; }
         if (s.t === "zorder") { if (items.has(s.id)) zorder.push({ id: s.id, after: s.after, layer: s.layer || null }); continue; }
         if (s.t === "hidelayer") { layerHides.set(s.id, s.on); continue; }
+        if (s.t === "newlayer") { if (!doc.folders.has(s.id) && !newLayers.some(l => l.id === s.id)) newLayers.push({ id: s.id, name: s.name, below: s.below || null }); continue; }
+        if (s.t === "dellayer") { const k = newLayers.findIndex(l => l.id === s.id); if (k >= 0) newLayers.splice(k, 1); continue; }
         if (s.t === "merge") { if (items.has(s.id) && items.has(s.into)) { merges.push({ id: s.id, into: s.into }); removed.add(s.id); } continue; }
         if (s.t === "unmerge") { const k = merges.findIndex(m => m.id === s.id); if (k >= 0) { merges.splice(k, 1); removed.delete(s.id); } continue; }
         if (s.t === "newboard") { if (goneBoards.has(s.board.id)) goneBoards.delete(s.board.id); else if (!doc.boards.some(b => b.id === s.board.id) && !boards.some(b => b.id === s.board.id)) boards.push({ ...s.board }); continue; }
@@ -498,7 +517,7 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, zorder, layerHides, merges };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, zorder, layerHides, merges, newLayers };
 }
 
 // ---- the hierarchy's changes ----
@@ -648,6 +667,8 @@ export function inverse(doc, view, s)
             const lay = movedTo(view, s.id) || layerOf(doc, o);
             return [{ t: "zorder", list: null, id: s.id, after: at > 0 ? ids[at - 1] : null, layer: s.layer ? lay : null }];
         }
+        case "newlayer": return [{ t: "dellayer", list: null, id: s.id }];
+        case "dellayer": { const l = (view.newLayers || []).find(x => x.id === s.id); return l ? [{ t: "newlayer", list: null, id: l.id, name: l.name, below: l.below }] : []; }
         case "hidelayer": return [{ t: "hidelayer", list: null, id: s.id, on: hiddenLayers(doc, view).has(s.id) }];
         case "merge": return [{ t: "unmerge", list: null, id: s.id }];
         case "unmerge": { const m = (view.merges || []).find(x => x.id === s.id); return m ? [{ t: "merge", list: null, id: m.id, into: m.into }] : []; }

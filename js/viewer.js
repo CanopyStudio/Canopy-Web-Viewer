@@ -12,7 +12,8 @@ export class Viewer
         this.canvas = document.createElement("canvas");
         this.canvas.className = "viewer";
         host.appendChild(this.canvas);
-        this.ctx = this.canvas.getContext("2d");
+        // (drawn straight to the screen where the browser can, skipping a frame's wait: strokes follow the finger closer)
+        this.ctx = this.canvas.getContext("2d", { desynchronized: true }) || this.canvas.getContext("2d");
         this.cam = { s: 1, tx: 0, ty: 0 };
         this.pointers = new Map();
         this.lastTap = 0;
@@ -62,12 +63,42 @@ export class Viewer
             // (moving: pictures scaled quickly; drawn well again once it stops)
             const fast = performance.now() < this.movingUntil;
             const t0 = performance.now();
-            render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
+            if (!this.wetDraw(sc)) render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
             render.stats.draws.push({ at: t0, ms: performance.now() - t0 }); if (render.stats.draws.length > 60) render.stats.draws.shift();
             clearTimeout(this.sharpen);
             if (fast) this.sharpen = setTimeout(() => this.redraw(), 160);
             if (this.overlay) { this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = "source-over"; this.overlay(this.ctx); }   // (what is picked, over it all)
         });
+    }
+
+    // A stroke under way ("wet": the drawing it is on, and any points guessed ahead of the finger): what is under that
+    // drawing and what is over it drawn once, when the stroke begins, and only the drawing itself again each frame, so
+    // a stroke keeps up however much the canvas holds. False when there is no stroke (or its drawing isn't there).
+    wetDraw(sc)
+    {
+        const wet = this.wet;
+        if (!wet) return false;
+        const at = sc.items.findIndex(o => o.id === wet.id);
+        if (at < 0) return false;
+        const W = this.canvas.width, H = this.canvas.height, key = [W, H, this.cam.s, this.cam.tx, this.cam.ty, sc.items.length].join();
+        if (wet.key !== key)
+        {
+            const layer = c => { c = c || document.createElement("canvas"); c.width = W; c.height = H; return c; };
+            wet.under = layer(wet.under); wet.over = layer(wet.over);
+            render.draw(wet.under.getContext("2d"), sc, this.cam, this.w, this.h, this.dpr, this.get, () => { }, { part: { from: 0, to: at, under: true } });
+            render.draw(wet.over.getContext("2d"), sc, this.cam, this.w, this.h, this.dpr, this.get, () => { }, { part: { from: at + 1, to: sc.items.length, names: true } });
+            wet.key = key;
+        }
+        const g = this.ctx;
+        g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+        g.drawImage(wet.under, 0, 0);
+        const pts = wet.pts, n = pts ? pts.length : 0;
+        if (n && wet.ahead && wet.ahead.length) pts.push(...wet.ahead);   // (the guessed points, for this frame only)
+        render.draw(g, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { part: { from: at, to: at + 1 } });
+        if (n) pts.length = n;
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.drawImage(wet.over, 0, 0);
+        return true;
     }
 
     // An area of the canvas filling the view (with "pad" of the view around it), eased there when "glide".

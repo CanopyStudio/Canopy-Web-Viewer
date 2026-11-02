@@ -425,17 +425,19 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
     stats.gaps = 0;
     smooth = opts.fast ? "low" : "high";   // (moving: drawn quickly; still: drawn well)
     const doc = sc.doc;
+    // ("part": only the items from one place in their order to another, laid over what is there, and no boards or names
+    // unless "under": the parts of the scene kept still while a stroke is drawn, see Viewer.redraw)
+    const part = opts.part, under = !part || part.under;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = opts.background || doc.canvas;
-    ctx.fillRect(0, 0, w, h);
+    if (under) { ctx.fillStyle = opts.background || doc.canvas; ctx.fillRect(0, 0, w, h); }
     const s = cam.s;
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * cam.tx, dpr * cam.ty);
     const view = { x: -cam.tx / s, y: -cam.ty / s, w: w / s, h: h / s };
     const meets = b => b.x <= view.x + view.w && b.x + b.w >= view.x && b.y <= view.y + view.h && b.y + b.h >= view.y;
     // Boards, under everything.
     const fill = doc.boardLook === 2 ? "#ffffff" : doc.boardColor ? rgba(doc.boardColor) : shade(doc.canvas, 0.07);
-    for (const b of sc.boards)
+    for (const b of under ? sc.boards : [])
     {
         if (!meets(b)) continue;
         ctx.beginPath();
@@ -443,7 +445,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         if (doc.boardLook === 1) { ctx.strokeStyle = shade(doc.canvas, 0.3); ctx.lineWidth = 1 / s; ctx.stroke(); }
         else { ctx.fillStyle = fill; ctx.fill(); }
     }
-    for (const o of sc.items)
+    for (const o of part ? sc.items.slice(part.from, part.to) : sc.items)
     {
         if (hidden(sc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
         if (!meets(outer(o, ctx))) continue;
@@ -460,7 +462,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         ctx.restore();
     }
     // The boards' names, over the art (a picture reaching over a board's top edge never hides one).
-    if (opts.names !== false)
+    if (opts.names !== false && (!part || part.names))
     {
         ctx.font = "500 " + 12 / s + "px 'IBM Plex Sans', system-ui, sans-serif";
         ctx.fillStyle = dark(doc.canvas) ? "rgba(234,236,235,.55)" : "rgba(21,22,22,.55)";
@@ -475,8 +477,14 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
 export function sketchItem(k)
 {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const take = (x, y, r) => { x0 = Math.min(x0, x - r); y0 = Math.min(y0, y - r); x1 = Math.max(x1, x + r); y1 = Math.max(y1, y + r); };
     for (const st of k.strokes)
-        for (let i = 0; i < st.pts.length; i += 3) { const r = st.size / 2 + 1; x0 = Math.min(x0, st.pts[i] - r); y0 = Math.min(y0, st.pts[i + 1] - r); x1 = Math.max(x1, st.pts[i] + r); y1 = Math.max(y1, st.pts[i + 1] + r); }
+    {
+        if (st.kind === "fill") { take(st.x, st.y, 0); take(st.x + st.w, st.y + st.h, 0); continue; }
+        if (st.kind === "move") { for (let i = 0; i < st.pts.length; i += 2) { take(st.pts[i], st.pts[i + 1], 1); take(st.pts[i] + st.dx, st.pts[i + 1] + st.dy, 1); } continue; }
+        if (st.kind === "clear") continue;   // (rubs out only)
+        for (let i = 0; i < st.pts.length; i += 3) take(st.pts[i], st.pts[i + 1], st.size / 2 + 1);
+    }
     if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
     return { kind: "sketch", id: k.id, name: k.name, strokes: k.strokes, x: x0, y: y0, w: x1 - x0, h: y1 - y0, group: k.layer ? k.layer.id : null, opacity: 1, blend: "normal", angle: 0, shear: 0 };
 }
@@ -487,12 +495,41 @@ export function drawStrokes(g, strokes)
     g.lineCap = "round"; g.lineJoin = "round";
     for (const st of strokes)
     {
+        if (st.kind === "fill" || st.kind === "move" || st.kind === "clear") { drawEdit(g, st); continue; }
         const p = st.pts, n = p.length / 3;
         if (n === 0) continue;
         g.save();
         g.globalCompositeOperation = st.kind === "erase" ? "destination-out" : "source-over";
         g.strokeStyle = g.fillStyle = st.kind === "erase" ? "#000" : st.color;
-        if (st.kind === "marker")
+        if (st.kind === "flat")
+        {
+            // Flat, simply (Board's Flat brush, without its worn edge): a flat oval tip held level, as a broad nib is,
+            // swept along, so the line is broad going up and down and thin going across; as wide as it is pressed.
+            const turn = 0, ca = Math.cos(turn), sa = Math.sin(turn), path = new Path2D();
+            const half = i => st.size * Math.max(0.35, p[i * 3 + 2]) / 2;
+            const tip = (x, y, a) => path.ellipse(x, y, a, a * 0.32, turn, 0, Math.PI * 2);
+            for (let i = 0; i < n; i++)
+            {
+                const x = p[i * 3], y = p[i * 3 + 1], a = half(i);
+                path.moveTo(x + a * ca, y + a * sa); tip(x, y, a);
+                if (i === 0) continue;
+                // (the band between this tip and the last: the oval's edge points facing across the way it went)
+                const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], a0 = half(i - 1), dx = x - x0, dy = y - y0;
+                if (dx === 0 && dy === 0) continue;
+                const u = dx * ca + dy * sa, v = (-dx * sa + dy * ca) / 0.32, l = Math.hypot(u, v) || 1;
+                const ex = -v / l, ey = u / l;   // (on the unit circle, before the oval is squashed and turned)
+                const off = (k, s2) => { const px = ex * k * s2, py = ey * k * 0.32 * s2; return [px * ca - py * sa, px * sa + py * ca]; };
+                const [p1x, p1y] = off(a0, 1), [p2x, p2y] = off(a, 1);
+                // (each band wound the way the ovals are, so where they overlap there is no gap)
+                const q = [[x0 + p1x, y0 + p1y], [x + p2x, y + p2y], [x - p2x, y - p2y], [x0 - p1x, y0 - p1y]];
+                let area = 0;
+                for (let k = 0; k < 4; k++) { const [ax, ay] = q[k], [bx, by] = q[(k + 1) % 4]; area += ax * by - bx * ay; }
+                if (area < 0) q.reverse();
+                path.moveTo(q[0][0], q[0][1]); for (let k = 1; k < 4; k++) path.lineTo(q[k][0], q[k][1]); path.closePath();
+            }
+            g.fill(path, "nonzero");
+        }
+        else if (st.kind === "marker")
         {
             g.globalAlpha = 0.55;
             g.lineWidth = st.size;
@@ -504,17 +541,64 @@ export function drawStrokes(g, strokes)
         }
         else
         {
-            // Piece by piece, each as wide as the pressure at its end (so it swells and thins along the way).
-            const w = i => st.size * Math.max(0.12, p[i * 3 + 2]);
+            // Piece by piece, each as wide as the pressure along it (so it swells and thins along the way), and each a
+            // curve from the middle of one gap to the middle of the next, bending at the point between (no corners).
+            const w = i => st.size * Math.max(0.12, p[i * 3 + 2]), x = i => p[i * 3], y = i => p[i * 3 + 1];
             if (n === 1) { g.beginPath(); g.arc(p[0], p[1], w(0) / 2, 0, Math.PI * 2); g.fill(); }
-            for (let i = 1; i < n; i++)
+            else if (n === 2) { g.lineWidth = (w(0) + w(1)) / 2; g.beginPath(); g.moveTo(x(0), y(0)); g.lineTo(x(1), y(1)); g.stroke(); }
+            for (let i = 1; n > 2 && i < n; i++)
             {
-                g.lineWidth = (w(i - 1) + w(i)) / 2;
-                g.beginPath(); g.moveTo(p[(i - 1) * 3], p[(i - 1) * 3 + 1]); g.lineTo(p[i * 3], p[i * 3 + 1]); g.stroke();
+                const ax = i === 1 ? x(0) : (x(i - 2) + x(i - 1)) / 2, ay = i === 1 ? y(0) : (y(i - 2) + y(i - 1)) / 2;
+                const last = i === n - 1, bx = last ? x(i) : (x(i - 1) + x(i)) / 2, by = last ? y(i) : (y(i - 1) + y(i)) / 2;
+                g.lineWidth = i === 1 ? (w(0) + w(1)) / 2 : (w(i - 2) + w(i - 1) * 2 + w(i)) / 4;
+                g.beginPath(); g.moveTo(ax, ay); g.quadraticCurveTo(x(i - 1), y(i - 1), bx, by); g.stroke();
             }
         }
         g.restore();
     }
+}
+// A fill (a picture of what it filled, made when it was tapped), a selection rubbed out ("clear"), or one moved ("move":
+// the paint inside its outline taken out and put back "dx", "dy" along): drawn onto what the drawing has so far.
+const fills = new Map();   // a fill's picture, by its stroke, decoded once
+export const filled = { onReady: null };   // told when a fill's picture has decoded (to draw again)
+export function fillImage(st)
+{
+    let img = fills.get(st.sid);
+    if (!img) { img = new Image(); img.onload = () => { if (filled.onReady) filled.onReady(); }; img.src = st.img; fills.set(st.sid, img); }
+    return img;
+}
+// Every fill's picture among some strokes, decoded (before they are painted into a drawing's tiles).
+export async function fillsDecoded(strokes) { for (const st of strokes) if (st.kind === "fill") { const img = fillImage(st); try { await img.decode(); } catch (e) { } } }
+function outlinePath(g, pts)
+{
+    g.beginPath();
+    for (let i = 0; i < pts.length; i += 2) if (i === 0) g.moveTo(pts[0], pts[1]); else g.lineTo(pts[i], pts[i + 1]);
+    g.closePath();
+}
+function drawEdit(g, st)
+{
+    g.save();
+    if (st.kind === "fill")
+    {
+        const img = fillImage(st);
+        if (img.complete && img.naturalWidth) { g.imageSmoothingEnabled = true; g.drawImage(img, st.x, st.y, st.w, st.h); }
+    }
+    else if (st.kind === "clear") { g.globalCompositeOperation = "destination-out"; outlinePath(g, st.pts); g.fillStyle = "#000"; g.fill(); }
+    else
+    {
+        // (in the canvas's own pixels: the piece copied out, the place rubbed out, the piece laid on along the way)
+        const cv = g.canvas, m = g.getTransform();
+        const piece = document.createElement("canvas");
+        piece.width = cv.width; piece.height = cv.height;
+        const pc = piece.getContext("2d");
+        pc.setTransform(m); outlinePath(pc, st.pts); pc.clip();
+        pc.setTransform(1, 0, 0, 1, 0, 0); pc.drawImage(cv, 0, 0);
+        g.globalCompositeOperation = "destination-out"; outlinePath(g, st.pts); g.fillStyle = "#000"; g.fill();
+        g.globalCompositeOperation = "source-over";
+        g.setTransform(1, 0, 0, 1, m.a * st.dx + m.c * st.dy, m.b * st.dx + m.d * st.dy);
+        g.drawImage(piece, 0, 0);
+    }
+    g.restore();
 }
 let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then laid on the view)
 

@@ -200,6 +200,7 @@ function show()
 async function showFiles()
 {
     if (full) setFull(false);
+    awake();
     closeViewers();
     document.documentElement.classList.remove("in-project");   // (come back from a project by the history, not by show: the page scrolls again)
     requestAnimationFrame(footColor);
@@ -505,7 +506,8 @@ function sortedLists()
 function showProject()
 {
     const locked = project.base.doc.readOnly;
-    const add = locked ? "" : tab === "lists" ? iconButton("newlist", "plus", "New list") : tab === "boards" ? iconButton("newboard", "plus", "New board") : iconButton("draw", "draw", "Draw") + iconButton("photo", "photo", "Add a photo");
+    // (the same bar on every tab: what + adds is the tab's; what only the canvas needs floats on it, top right: corner)
+    const add = locked ? "" : tab === "lists" ? iconButton("newlist", "plus", "New list") : tab === "boards" ? iconButton("newboard", "plus", "New board") : iconButton("addmenu", "plus", "Add");
     let shell = app.querySelector(".project");
     if (!shell || shell.dataset.path !== project.path)
     {
@@ -520,7 +522,7 @@ function showProject()
     shell.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.value === tab));
     requestAnimationFrame(() => { const t = shell.querySelector(".tabs"); if (t) document.documentElement.style.setProperty("--tabs-h", t.offsetHeight + "px"); });   // (a board opened stops above them)
     const head = shell.querySelector("#head");
-    head.innerHTML = bar(project.name, iconButton("files", "back", "Back"), statusHtml() + undoButtons() + (tab === "canvas" ? iconButton("fitall", "fit", "Fit everything") : "") + add);
+    head.innerHTML = bar(project.name, iconButton("files", "back", "Back"), statusHtml() + undoButtons() + add);
     wire(head);
     const holder = shell.querySelector("#tab");
     if (full && tab !== "canvas") setFull(false);
@@ -532,6 +534,7 @@ function showProject()
     else showCanvas(holder, fresh);
     if (fresh && !calm) holder.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
     showOver();
+    awake();
 }
 
 // Two columns, each card going into the shorter one (so they sit together however tall they are).
@@ -734,9 +737,9 @@ function showCanvas(holder, fresh)
     if (!canvasView || !holder.contains(canvasView.host))
     {
         closeViewers();
-        holder.innerHTML = '<div class="stage"></div><div class="corner">' + iconButton("hierarchy", "layers", "Layers") + iconButton("fullscreen", "full", "Full screen") + "</div>";
-        wire(holder.querySelector(".corner"));
+        holder.innerHTML = '<div class="stage"></div><div class="corner"></div>';
         canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, pictureGetter(), null);
+        corner();
         editable(canvasView);
         canvasView.onFitAll = () => fitAll(true);
         measure(holder.querySelector(".stage"));
@@ -745,6 +748,7 @@ function showCanvas(holder, fresh)
         if (cam && fresh) { canvasView.cam = cam; canvasView.redraw(); } else fitAll(false);
     }
     else canvasView.redraw();
+    corner();
 }
 // The measuring readout (the address ending ?measure): what drawing and the pictures cost on this phone, as it goes.
 const measuring = new URLSearchParams(location.search).has("measure");
@@ -812,9 +816,15 @@ let lifted = false;  // what is picked being moved or sized by a finger (drawn l
 
 function editable(v)
 {
-    v.onTap = (x, y) => { if (!pen) tapObject(v, x, y); };   // (drawing: a tap is a dot, not a pick)
-    v.overlay = ctx => drawPicked(v, ctx);
-    v.grab = (at, e) => pen ? strokeFrom(v, at, e) : grabPicked(v, at);
+    v.onTap = (x, y) =>
+    {
+        // (drawing: a tap is a dot, not a pick; with Select, a pick; with Fill or the Eyedropper, theirs)
+        if (!pen || pen.kind === "select") tapObject(v, x, y);
+        else if (pen.kind === "fill") fillAt(v, v.toScreen(x, y));
+        else if (pen.kind === "dropper") dropperAt(v, v.toScreen(x, y));
+    };
+    v.overlay = ctx => { drawPicked(v, ctx); drawSelection(v, ctx); };
+    v.grab = (at, e) => pen ? drawPress(v, at, e) : grabPicked(v, at);
     tools(v);   // (something copied: ready to paste)
 }
 function pickedBox()
@@ -968,7 +978,7 @@ function tools(v)
             {
                 const groups = [...new Set(its.flatMap(o => cnpy.lockers(doc, o, project.view)))];
                 step({ t: "lock", ids: picked.ids, on: false, groups, list: null });
-                if (groups.some(g => doc.folders.has(g))) toast("Its whole layer is unlocked too");
+                if (groups.some(g => doc.folders.has(g))) toast("Its layer was unlocked too");
             }
             feel.pick(); tools(v); v.redraw();
         }
@@ -1029,49 +1039,166 @@ function paste(v)
 // drawn on (project.drawOn) until another is chosen (in the hierarchy) or a new one asked for: saved or not, it is
 // drawn on and rubbed out the same, its pixels and the new strokes painted together each time it is saved ----
 
-let pen = null;          // drawing, how: { kind: "pen" | "marker" | "erase", size (on the screen), color }; null when not
+let pen = null;          // drawing: { kind: the tool in use, slots: the tool each of the bar's slots shows, size (on the screen), color }; null when not
 let sketchId = null;     // the strokes on a saved drawing since it was last saved: kept together under this id
+let paintSel = null;     // what is selected of the drawing being drawn on (Drawing Select): { pts: its outline, on the canvas }
 const SIZES = [3, 8, 16, 32];
 const INKS = ["#EAECEB", "#151616", "#E05A47", "#F2B53A", "#4FB477", "#3F8FD8", "#8E5BD6", "#E45FA8"];
+// The drawing bar's three slots, each holding a few tools: a tap uses the one it shows, a press and hold picks another.
+const SLOTS = [
+    { id: "pick", tools: [["select", "select", "Select"], ["rect", "selrect", "Drawing Select (box)"], ["lasso", "sellasso", "Drawing Select (lasso)"]] },
+    { id: "brush", tools: [["pen", "pencil", "Pen"], ["marker", "marker", "Marker"], ["flat", "flat", "Flat"]] },
+    { id: "rub", tools: [["erase", "eraser", "Eraser"], ["fill", "fill", "Fill"], ["dropper", "dropper", "Eyedropper"]] }
+];
+const TOOL_OF = Object.fromEntries(SLOTS.flatMap(sl => sl.tools.map(t => [t[0], { slot: sl.id, icon: t[1], name: t[2] }])));
 function drawMode()
 {
     const v = boardView || canvasView;
     if (!v || !project || project.base.doc.readOnly) return;
-    if (pen) { pen = null; tools(v); if (project.steps.length) { clearTimeout(saveTimer); save(); } return; }
+    if (pen) { endDrawing(v); return; }
     const was = remembered("canopy.pen", null) || {};
-    pen = { kind: was.kind || "pen", size: SIZES.includes(was.size) ? was.size : 8, color: was.color || (project.base.doc.recent || [])[0] || INKS[0] };
+    const slots = { pick: "select", brush: "pen", rub: "erase", ...(was.slots || {}) };
+    const kind = TOOL_OF[was.kind] && was.kind !== "dropper" ? was.kind : "pen";
+    pen = { kind, slots, size: SIZES.includes(was.size) ? was.size : 8, color: was.color || (project.base.doc.recent || [])[0] || INKS[0] };
     pick(null, v);
+    corner();
+}
+function endDrawing(v)
+{
+    pen = null; paintSel = null; closePop();
+    if (v) tools(v);
+    corner();
+    redrawViewers();
+    if (project && project.steps.length) { clearTimeout(saveTimer); save(); }
 }
 // The drawing strokes go on from now (null: a new one, made with the next stroke), kept for next time.
-function drawOnto(id) { project.drawOn = id; sketchId = null; remember("canopy.drawon." + project.path, id); }
-function keepPen() { remember("canopy.pen", { kind: pen.kind, size: pen.size, color: pen.color }); }
+function drawOnto(id) { project.drawOn = id; sketchId = null; paintSel = null; remember("canopy.drawon." + project.path, id); }
+function keepPen() { remember("canopy.pen", { kind: pen.kind, slots: pen.slots, size: pen.size, color: pen.color }); }
+function useTool(kind, v)
+{
+    if (!TOOL_OF[kind]) return;
+    if (pen.kind !== kind && TOOL_OF[pen.kind].slot === "pick" && TOOL_OF[kind].slot !== "pick") { paintSel = null; }
+    pen.kind = kind; pen.slots[TOOL_OF[kind].slot] = kind;
+    if (kind !== "select" && picked) pick(null, v);
+    keepPen(); tools(v); v.redraw();
+}
 function drawBar(v, bar, host)
 {
     if (!bar) { bar = element('<div class="tools drawbar"></div>'); host.appendChild(bar); }
     bar.classList.add("drawbar");
-    const kinds = [["pen", "pencil", "Pen"], ["marker", "marker", "Marker"], ["erase", "eraser", "Eraser"]];
-    // (the size and color in one: a dot of the color, as big as the brush, opening both)
-    bar.innerHTML = kinds.map(k => '<button class="glyph' + (pen.kind === k[0] ? " on" : "") + '" data-kind="' + k[0] + '" aria-label="' + k[2] + '" title="' + k[2] + '">' + icon(k[1], 20) + "</button>").join("")
-        + '<span class="sep"></span><button class="glyph ink" data-act="ink" aria-label="Size and color" title="Size and color">' + dot(pen.size, pen.color) + "</button>"
-        + '<button class="glyph" data-act="layers" aria-label="Layers" title="Layers">' + icon("layers", 20) + "</button>"
-        + '<button data-act="done">Done</button>';
-    bar.querySelectorAll("[data-kind]").forEach(b => b.addEventListener("click", () => { pen.kind = b.dataset.kind; keepPen(); tools(v); }));
-    bar.querySelector('[data-act="ink"]').addEventListener("click", () => inkMenu(v));
-    bar.querySelector('[data-act="layers"]').addEventListener("click", () => hierarchy());
-    bar.querySelector('[data-act="done"]').addEventListener("click", () => { pen = null; tools(v); if (project.steps.length) { clearTimeout(saveTimer); save(); } });
+    const slot = sl =>
+    {
+        const k = pen.slots[sl.id], t = TOOL_OF[k], on = TOOL_OF[pen.kind].slot === sl.id;
+        return '<button class="glyph slot' + (on ? " on" : "") + '" data-slot="' + sl.id + '" aria-label="' + t.name + ' (hold for more)" title="' + t.name + '">' + icon(t.icon, 20) + '<i class="more"></i></button>';
+    };
+    bar.innerHTML = SLOTS.map(slot).join("") + '<span class="sep"></span>'
+        + '<button class="glyph ink" data-act="ink" aria-label="Size and color" title="Size and color">' + dot(pen.size, pen.color) + "</button>"
+        + (paintSel ? '<button class="glyph" data-act="clear" aria-label="Delete what&#39;s selected" title="Delete what&#39;s selected">' + icon("trash", 20) + "</button>" : "")
+        + '<button class="glyph" data-act="layers" aria-label="Hierarchy" title="Hierarchy">' + icon("layers", 20) + "</button>"
+        + '<button class="done" data-act="done">Done</button>';
+    bar.querySelectorAll("[data-slot]").forEach(b => holdable(b, () => useTool(pen.slots[b.dataset.slot], v), () => slotPop(v, b)));
+    bar.querySelector('[data-act="ink"]').addEventListener("click", e => { const b = e.currentTarget; if (popOf === b) closePop(); else inkPop(v, b); });
+    const clear = bar.querySelector('[data-act="clear"]');
+    if (clear) clear.addEventListener("click", () => clearSelection(v));
+    bar.querySelector('[data-act="layers"]').addEventListener("click", () => { closePop(); hierarchy(); });
+    bar.querySelector('[data-act="done"]').addEventListener("click", () => endDrawing(v));
+}
+// A button that does one thing when tapped and another when held (the bar's slots: their choices).
+function holdable(b, tap, hold)
+{
+    let timer = null, held = false;
+    b.addEventListener("pointerdown", () => { held = false; clearTimeout(timer); timer = setTimeout(() => { held = true; feel.pick(); hold(); }, 380); });
+    const stop = () => clearTimeout(timer);
+    b.addEventListener("pointerup", stop); b.addEventListener("pointercancel", stop); b.addEventListener("pointerleave", stop);
+    b.addEventListener("contextmenu", e => e.preventDefault());
+    b.addEventListener("click", () => { if (held) { held = false; return; } if (popOf === b) { closePop(); return; } closePop(); tap(); });
 }
 function dot(size, color) { const d = Math.max(5, Math.min(24, size * 0.75)); return '<i style="width:' + d + "px;height:" + d + "px;background:" + color + '"></i>'; }
-// The brush's size, and the colors to draw in: the project's last used and its palette, then a few of the app's own.
-function inkMenu(v)
+
+// ---- a popover from a button on the drawing bar: a card with a tab reaching down over its button, the two one shape
+// (as Board's Drawing Bar has them); the button under the tab shows it can be put away there ----
+
+let popOf = null, popEl = null;
+function closePop() { if (popEl) popEl.remove(); popEl = null; if (popOf) popOf.classList.remove("popped"); popOf = null; document.removeEventListener("pointerdown", popAway, true); }
+function popAway(e) { if (popEl && !popEl.contains(e.target) && !(popOf && popOf.contains(e.target))) closePop(); }
+function popFrom(btn, html, wire)
 {
-    const doc = project.base.doc, all = [...new Set([...(doc.recent || []), ...doc.palette, ...INKS].map(c => c.slice(0, 7).toUpperCase()))].slice(0, 24);
-    sheetUp(() => '<div class="section first">Size</div><div class="sizes">' + SIZES.map(z => '<button class="sizedot' + (z === pen.size ? " on" : "") + '" data-do="size" data-value="' + z + '" aria-label="Size ' + z + '">' + dot(z, pen.color) + "</button>").join("") + "</div>"
-        + '<div class="section">Color</div><div class="inks">' + all.map(c => '<button class="inkdot' + (c === pen.color.toUpperCase() ? " on" : "") + '" data-do="ink" data-value="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>').join("") + "</div>",
-        (does, value, close, again) =>
-        {
-            if (does === "size") { pen.size = +value; keepPen(); tools(v); again(); }
-            if (does === "ink") { pen.color = value; if (pen.kind === "erase") pen.kind = "pen"; keepPen(); close(() => tools(v)); }
-        });
+    closePop();
+    const bar = btn.closest(".drawbar"), frame = bar.parentNode, fb = frame.getBoundingClientRect(), bb = btn.getBoundingClientRect();
+    const el = element('<div class="pop"><svg class="shape"><path/></svg><div class="card">' + html + "</div></div>");
+    frame.appendChild(el);
+    const card = el.querySelector(".card");
+    const W = card.offsetWidth, body = card.offsetHeight, gap = 12, r = 8, f = 8, foot = 7, barTop = bar.getBoundingClientRect().top - fb.top;
+    const sw = bb.width + 4, sx = bb.left - fb.left - 2, stTop = bb.top - fb.top - 2, stBot = bb.bottom - fb.top + 2;
+    const room = fb.width - 8;
+    let L = sx + sw / 2 - W / 2;
+    L = Math.max(8, Math.min(L, room - W));
+    const top = barTop - gap - body;   // (clear of the bar, comfortably, as Board's are: only its tab reaches down)
+    const x = sx - L;
+    const flushL = x < r + f + 2, flushR = x + sw > W - r - f - 2;
+    if (flushL) L = sx; else if (flushR) L = sx + sw - W;
+    const X = sx - L, H = stBot - top;
+    let d = "M" + r + ",0.5 L" + (W - r) + ",0.5 A" + r + "," + r + " 0 0 1 " + (W - 0.5) + "," + r;
+    if (flushR) d += " L" + (W - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (W - foot) + "," + (H - 0.5);
+    else d += " L" + (W - 0.5) + "," + (body - r) + " A" + r + "," + r + " 0 0 1 " + (W - r) + "," + (body - 0.5) + " L" + (X + sw + f) + "," + (body - 0.5) + " A" + f + "," + f + " 0 0 0 " + (X + sw - 0.5) + "," + (body + f) + " L" + (X + sw - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (X + sw - foot) + "," + (H - 0.5);
+    if (flushL) d += " L" + foot + "," + (H - 0.5) + " A" + foot + "," + foot + " 0 0 1 0.5," + (H - foot);
+    else d += " L" + (X + foot) + "," + (H - 0.5) + " A" + foot + "," + foot + " 0 0 1 " + (X + 0.5) + "," + (H - foot) + " L" + (X + 0.5) + "," + (body + f) + " A" + f + "," + f + " 0 0 0 " + (X - f) + "," + (body - 0.5) + " L" + r + "," + (body - 0.5) + " A" + r + "," + r + " 0 0 1 0.5," + (body - r);
+    d += " L0.5," + r + " A" + r + "," + r + " 0 0 1 " + r + ",0.5 Z";
+    Object.assign(el.style, { left: L + "px", top: top + "px", width: W + "px", height: H + "px" });
+    const svg = el.querySelector("svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.querySelector("path").setAttribute("d", d);
+    const arrow = element('<i class="down"></i>');
+    Object.assign(arrow.style, { left: X + sw / 2 - 5 + "px", top: H - (stBot - stTop) / 2 - 3 + "px" });
+    el.appendChild(arrow);
+    // (its tab is pressed to put it away; not by the lifting of the finger that held its button down to open it)
+    let fresh = true;
+    el.addEventListener("pointerdown", () => { fresh = false; }, true);
+    arrow.addEventListener("click", () => { if (!fresh) closePop(); });
+    btn.classList.add("popped");
+    popOf = btn; popEl = el;
+    if (!calm) el.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }], { duration: 160, easing: "cubic-bezier(.2,.9,.3,1)" });
+    setTimeout(() => document.addEventListener("pointerdown", popAway, true), 0);
+    if (wire) wire(card);
+}
+// A slot held: its tools, the one it shows lit.
+function slotPop(v, b)
+{
+    const sl = SLOTS.find(x => x.id === b.dataset.slot);
+    popFrom(b, '<div class="choices">' + sl.tools.map(t => '<button class="glyph' + (pen.slots[sl.id] === t[0] ? " on" : "") + '" data-tool="' + t[0] + '" aria-label="' + t[2] + '" title="' + t[2] + '">' + icon(t[1], 20) + "</button>").join("") + "</div>",
+        card => card.querySelectorAll("[data-tool]").forEach(x => x.addEventListener("click", () => { closePop(); useTool(x.dataset.tool, v); })));
+}
+// The brush's size, and the colors to draw in: the project's last used and its palette, then a few of the app's own.
+// Picking one leaves it open (to pick the other too); a tap away, or on its tab, puts it away.
+function inkPop(v, b)
+{
+    const doc = project.base.doc, own = () => remembered("canopy.inks", []);
+    const all = () => [...new Set([...own(), ...(doc.recent || []), ...doc.palette, ...INKS].map(c => c.slice(0, 7).toUpperCase()))].slice(0, 23);
+    const html = () => '<div class="psection">Size</div><div class="sizes">' + SIZES.map(z => '<button class="sizedot' + (z === pen.size ? " on" : "") + '" data-size="' + z + '" aria-label="Size ' + z + '">' + dot(z, pen.color) + "</button>").join("") + "</div>"
+        + '<div class="psection">Color</div><div class="inks">' + all().map(c => '<button class="inkdot' + (c === pen.color.toUpperCase() ? " on" : "") + '" data-ink="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>').join("")
+        + '<label class="inkdot custom" aria-label="Another color" title="Another color">' + icon("plus", 18) + '<input type="color" value="' + pen.color.slice(0, 7) + '"></label></div>';
+    const take = (card, c) =>
+    {
+        pen.color = c.toUpperCase();
+        if (TOOL_OF[pen.kind].slot !== "brush" && pen.kind !== "fill") { pen.kind = pen.slots.brush; markSlots(v); }   // (a color is to paint with)
+        keepPen(); card.innerHTML = html(); wireIt(card); b.innerHTML = dot(pen.size, pen.color);
+    };
+    const wireIt = card =>
+    {
+        // Another color, from the phone's own picker: kept among these, first, for next time.
+        const pickr = card.querySelector('input[type="color"]');
+        if (pickr) pickr.addEventListener("change", () => { const c = pickr.value.toUpperCase(); remember("canopy.inks", [c].concat(own().filter(x => x !== c)).slice(0, 6)); take(card, c); });
+        card.querySelectorAll("[data-size]").forEach(x => x.addEventListener("click", () => { pen.size = +x.dataset.size; keepPen(); card.innerHTML = html(); wireIt(card); b.innerHTML = dot(pen.size, pen.color); }));
+        card.querySelectorAll("[data-ink]").forEach(x => x.addEventListener("click", () => take(card, x.dataset.ink)));
+    };
+    popFrom(b, html(), wireIt);
+}
+// The slots lit as the tool in use is, the popover left open.
+function markSlots(v)
+{
+    const bar = (v.host.parentNode || document).querySelector(".drawbar");
+    if (!bar) return;
+    bar.querySelectorAll("[data-slot]").forEach(x => { const k = pen.slots[x.dataset.slot]; x.classList.toggle("on", TOOL_OF[pen.kind].slot === x.dataset.slot); x.innerHTML = icon(TOOL_OF[k].icon, 20) + '<i class="more"></i>'; });
 }
 // The next free name for a drawing: Drawing 1, 2, ..., past the project's own and those made here.
 function drawingName()
@@ -1081,12 +1208,11 @@ function drawingName()
     while (taken.has("Drawing " + n)) n++;
     return "Drawing " + n;
 }
-// A stroke, from a press: shown as it goes (the project's preview step), kept as a step when the finger lifts; a
-// second finger (to pan or zoom) takes it back.
-function strokeFrom(v, at, e)
+// Where what is drawn goes: the drawing being drawn on, saved (its strokes since kept together, painted onto its
+// pixels as it is saved again) or not yet saved; with neither, a new one (which it then is) unless "existing" asks
+// for one there already (null then).
+function drawTarget(existing)
 {
-    // Onto the drawing being drawn on: one saved (its strokes since kept together, painted onto its pixels as it is
-    // saved again), one not yet saved, or, with neither, a new one (which it then is).
     if (project.drawOn === undefined) project.drawOn = remembered("canopy.drawon." + project.path, null);   // (the one drawn on last time, here)
     const doc = project.base.doc, on = project.drawOn, saved = on && doc.items.find(o => o.id === on && o.kind === "paint");
     const straight = saved && saved.file.endsWith("/") && !saved.angle && !saved.shear && !saved.flipX && !saved.flipY && !project.view.removed.has(on);   // (one turned or flipped: a new one)
@@ -1099,33 +1225,208 @@ function strokeFrom(v, at, e)
         id = k ? k.id : sketchId;
     }
     else if (on && (k = project.view.sketches.find(o => o.id === on && !o.base))) id = on;
+    else if (existing) return null;
     else { id = cnpy.newId(); drawOnto(id); }
     const name = k ? k.name : base ? saved.name : drawingName(), layer = k ? k.layer : base ? cnpy.layerOf(doc, saved) : cnpy.topLayer(doc);
-    const s = { t: "stroke", list: null, id, base, name, layer, author: dbx.who(),
-        stroke: { sid: cnpy.newId(), kind: pen.kind, color: pen.color, size: Math.round(pen.size / v.cam.s * 100) / 100, pts: [] } };
+    return { id, base, name, layer };
+}
+function strokeStep(tg, stroke) { return { t: "stroke", list: null, id: tg.id, base: tg.base, name: tg.name, layer: tg.layer, author: dbx.who(), stroke: { sid: cnpy.newId(), ...stroke } }; }
+// What a press does while drawing: the tool in use's.
+function drawPress(v, at, e)
+{
+    const k = pen.kind;
+    if (k === "select") return grabPicked(v, at);
+    if (k === "rect" || k === "lasso") return selectFrom(v, at);
+    if (k === "fill" || k === "dropper") return null;   // (on a tap: a finger put down to pan or pinch fills nothing)
+    return strokeFrom(v, at, e);
+}
+// A stroke, from a press: shown as it goes (the project's preview step), kept as a step when the finger lifts; a
+// second finger (to pan or zoom) takes it back.
+function strokeFrom(v, at, e)
+{
+    const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: Math.round(pen.size / v.cam.s * 100) / 100, pts: [] });
     const pts = s.stroke.pts;
-    let lx = null, ly = null;
+    // Each position eased toward, as Board's brush does at its Smoothing setting (0.35, its own to start with), which
+    // irons out a finger's wobble; the line is drawn as curves through the eased points (render.js, drawStrokes).
+    const lag = 0.35 * 0.9;
+    let ex = null, ey = null, ep = 1, lx = null, ly = null, rawX = null, rawY = null, rawP = 1;
+    const ease = (p, ev) =>
+    {
+        const pressure = ev && ev.pointerType === "pen" ? Math.max(0.05, ev.pressure || 0.5) : 1;
+        if (ex === null) { ex = p.x; ey = p.y; ep = pressure; }
+        else { ex += (p.x - ex) * (1 - lag); ey += (p.y - ey) * (1 - lag); ep += (pressure - ep) * (1 - lag * 0.5); }
+        return pressure;
+    };
+    const keep = (x, y, pr, into) =>
+    {
+        const c = v.toCanvas(x, y);
+        into.push(Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(pr * 100) / 100);
+    };
     const add = (p, ev) =>
     {
-        if (lx !== null && Math.hypot(p.x - lx, p.y - ly) < 0.75) return;   // (closer than a pixel or so: no new point)
-        lx = p.x; ly = p.y;
-        const c = v.toCanvas(p.x, p.y), pressure = ev && ev.pointerType === "pen" ? Math.max(0.05, ev.pressure || 0.5) : 1;
-        pts.push(Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(pressure * 100) / 100);
+        rawX = p.x; rawY = p.y; rawP = ease(p, ev);
+        if (lx !== null && Math.hypot(ex - lx, ey - ly) < 0.75) return;   // (closer than a pixel or so: no new point)
+        lx = ex; ly = ey;
+        keep(ex, ey, ep, pts);
     };
     add(at, e);
     project.preview = s;
-    refreshView(); v.redraw();
+    refreshView();
+    const wet = v.wet = { id: s.base || s.id, pts, ahead: [] };   // (a saved drawing: its strokes are drawn on it, in its place)
+    v.redraw();
     return {
         move(now, was, ev)
         {
             const evs = ev && ev.getCoalescedEvents ? ev.getCoalescedEvents() : [];
             if (evs.length) for (const one of evs) add(v.at(one), one); else add(now, ev);
+            // Where the finger is guessed to be going next (where the browser can guess), eased on from here: drawn
+            // this frame only, so the line keeps up with the finger.
+            wet.ahead = [];
+            const guess = ev && ev.getPredictedEvents ? ev.getPredictedEvents() : [];
+            if (guess.length)
+            {
+                let gx = ex, gy = ey;
+                for (const one of guess) { const q = v.at(one); gx += (q.x - gx) * (1 - lag); gy += (q.y - gy) * (1 - lag); }
+                keep(gx, gy, ep, wet.ahead);
+            }
             v.redraw();
         },
-        end() { project.preview = null; step(s); redrawViewers(); },
-        cancel() { project.preview = null; refreshView(); v.redraw(); }
+        end()
+        {
+            // The rest of the way to where the finger lifted (easing leaves the line a little behind it).
+            if (rawX !== null && pts.length > 3 && Math.hypot(rawX - ex, rawY - ey) >= 0.75) keep(rawX, rawY, rawP, pts);
+            v.wet = null; project.preview = null; step(s); redrawViewers();
+        },
+        cancel() { v.wet = null; project.preview = null; refreshView(); v.redraw(); }
     };
 }
+// The Eyedropper: the color drawn where it is pressed (as the screen shows it), to paint with; back to the brush.
+function dropperAt(v, at)
+{
+    const px = v.ctx.getImageData(Math.round(at.x * v.dpr), Math.round(at.y * v.dpr), 1, 1).data;
+    if (px[3] === 0) { toast("Nothing there to take a color from"); return; }
+    pen.color = "#" + [px[0], px[1], px[2]].map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase();
+    pen.kind = pen.slots.brush;
+    keepPen(); tools(v);
+    toast(pen.color + " is the current color");
+}
+// Fill: the area pressed (as far as the color there goes, of what the screen shows), painted in the color, onto the
+// drawing being drawn on. Kept as a picture of what it filled, so it lands the same when saved.
+function fillAt(v, at)
+{
+    const W = v.canvas.width, H = v.canvas.height, sx = Math.round(at.x * v.dpr), sy = Math.round(at.y * v.dpr);
+    if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
+    const px = v.ctx.getImageData(0, 0, W, H).data, at0 = (sy * W + sx) * 4;
+    const r0 = px[at0], g0 = px[at0 + 1], b0 = px[at0 + 2], tol = 48;
+    const like = i => Math.abs(px[i] - r0) + Math.abs(px[i + 1] - g0) + Math.abs(px[i + 2] - b0) <= tol;
+    const inside = new Uint8Array(W * H), todo = [sy * W + sx];
+    let x0 = sx, y0 = sy, x1 = sx, y1 = sy;
+    while (todo.length)
+    {
+        const i = todo.pop();
+        if (inside[i] || !like(i * 4)) continue;
+        inside[i] = 1;
+        const x = i % W, y = (i / W) | 0;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (x > 0) todo.push(i - 1); if (x < W - 1) todo.push(i + 1); if (y > 0) todo.push(i - W); if (y < H - 1) todo.push(i + W);
+    }
+    // (grown a pixel, so it reaches under the soft edge of what bounds it)
+    x0 = Math.max(0, x0 - 1); y0 = Math.max(0, y0 - 1); x1 = Math.min(W - 1, x1 + 1); y1 = Math.min(H - 1, y1 + 1);
+    const w = x1 - x0 + 1, h = y1 - y0 + 1, cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    const g = cv.getContext("2d"), out = g.createImageData(w, h), [cr, cg, cb] = [1, 3, 5].map(k => parseInt(pen.color.slice(k, k + 2), 16));
+    for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++)
+        {
+            const X = x + x0, Y = y + y0, i = Y * W + X;
+            const on = inside[i] || (X > 0 && inside[i - 1]) || (X < W - 1 && inside[i + 1]) || (Y > 0 && inside[i - W]) || (Y < H - 1 && inside[i + W]);
+            if (!on) continue;
+            const o = (y * w + x) * 4;
+            out.data[o] = cr; out.data[o + 1] = cg; out.data[o + 2] = cb; out.data[o + 3] = 255;
+        }
+    g.putImageData(out, 0, 0);
+    const a = v.toCanvas(x0 / v.dpr, y0 / v.dpr), s = v.cam.s * v.dpr;
+    step(strokeStep(drawTarget(false), { kind: "fill", img: cv.toDataURL("image/png"), x: Math.round(a.x * 100) / 100, y: Math.round(a.y * 100) / 100, w: Math.round(w / s * 100) / 100, h: Math.round(h / s * 100) / 100 }));
+    feel.drop();
+    redrawViewers();
+}
+// Drawing Select: a box or a lasso drawn round paint of the drawing being drawn on; pressed inside what is selected,
+// it is moved instead (one step, the selection with it). A tap outside lets go.
+function selectFrom(v, at)
+{
+    const c0 = v.toCanvas(at.x, at.y);
+    if (paintSel && insidePoly(paintSel.pts, c0.x, c0.y))
+    {
+        const tg = drawTarget(true);
+        if (!tg) { paintSel = null; v.redraw(); return null; }
+        const s = strokeStep(tg, { kind: "move", pts: paintSel.pts.slice(), dx: 0, dy: 0 });
+        project.preview = s; refreshView(); v.redraw();
+        return {
+            move(now) { const c = v.toCanvas(now.x, now.y); s.stroke.dx = Math.round((c.x - c0.x) * 10) / 10; s.stroke.dy = Math.round((c.y - c0.y) * 10) / 10; refreshView(); v.redraw(); },
+            end()
+            {
+                project.preview = null;
+                if (s.stroke.dx || s.stroke.dy) { step(s); paintSel = { pts: paintSel.pts.map((q, i) => q + (i % 2 ? s.stroke.dy : s.stroke.dx)) }; }
+                else refreshView();
+                redrawViewers();
+            },
+            cancel() { project.preview = null; refreshView(); v.redraw(); }
+        };
+    }
+    if (!drawTarget(true)) { toast("Choose a drawing to select on, in the Hierarchy"); return null; }
+    const box = pen.kind === "rect", pts = [c0.x, c0.y];
+    paintSel = null;
+    selecting = { pts, box };
+    v.redraw();
+    return {
+        move(now)
+        {
+            const c = v.toCanvas(now.x, now.y);
+            if (box) { pts.length = 2; pts.push(c.x, c0.y, c.x, c.y, c0.x, c.y); }
+            else { const lx = pts[pts.length - 2], ly = pts[pts.length - 1]; if (Math.hypot((c.x - lx) * v.cam.s, (c.y - ly) * v.cam.s) > 3) pts.push(c.x, c.y); }
+            v.redraw();
+        },
+        end()
+        {
+            selecting = null;
+            const xs = pts.filter((q, i) => i % 2 === 0), ys = pts.filter((q, i) => i % 2 === 1);
+            const big = (Math.max(...xs) - Math.min(...xs)) * v.cam.s > 6 || (Math.max(...ys) - Math.min(...ys)) * v.cam.s > 6;
+            paintSel = big && pts.length >= 6 ? { pts: pts.map(q => Math.round(q * 10) / 10) } : null;
+            tools(v); v.redraw();
+        },
+        cancel() { selecting = null; v.redraw(); }
+    };
+}
+let selecting = null;   // a selection being drawn: { pts, box }
+function insidePoly(p, x, y)
+{
+    let inside = false;
+    for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2)
+        if ((p[i + 1] > y) !== (p[j + 1] > y) && x < (p[j] - p[i]) * (y - p[i + 1]) / (p[j + 1] - p[i + 1]) + p[i]) inside = !inside;
+    return inside;
+}
+// What is selected rubbed out (one step).
+function clearSelection(v)
+{
+    const tg = paintSel && drawTarget(true);
+    if (!tg) return;
+    step(strokeStep(tg, { kind: "clear", pts: paintSel.pts.slice() }));
+    paintSel = null; feel.gone(); tools(v); redrawViewers();
+}
+// The selection's outline over the canvas, marching black and white so it shows on any paint.
+function drawSelection(v, ctx)
+{
+    const p = selecting ? selecting.pts : paintSel ? paintSel.pts : null;
+    if (!pen || !p || p.length < 4) return;
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i < p.length; i += 2) { const q = v.toScreen(p[i], p[i + 1]); if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); }
+    if (!selecting || selecting.box) ctx.closePath();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = "#fff"; ctx.stroke();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = "#000"; ctx.stroke();
+    ctx.restore();
+}
+
 // The drawings made here, painted into tiles as Board keeps a drawing layer's pixels (cnpy.TILE square, at cnpy.DENSITY
 // to a unit, from the canvas's corner), for the file: tiles with nothing on them left out. Strokes on a saved drawing
 // are painted onto its own pixels, in its own pixels' size and place, into a folder of its own (so the old tiles,
@@ -1139,22 +1440,8 @@ async function paintSketches(view, doc)
         const it = render.sketchItem(k);
         if (it.w <= 0 || it.h <= 0) continue;
         const fx0 = Math.floor(it.x * D), fy0 = Math.floor(it.y * D), fx1 = Math.ceil((it.x + it.w) * D), fy1 = Math.ceil((it.y + it.h) * D);
-        const tiles = new Map();
-        for (let r = Math.floor(fy0 / T); r <= Math.floor((fy1 - 1) / T); r++)
-            for (let c = Math.floor(fx0 / T); c <= Math.floor((fx1 - 1) / T); c++)
-            {
-                const cv = document.createElement("canvas");
-                cv.width = cv.height = T;
-                const g = cv.getContext("2d", { willReadFrequently: true });
-                g.setTransform(D, 0, 0, D, -c * T, -r * T);
-                render.drawStrokes(g, k.strokes);
-                const px = g.getImageData(0, 0, T, T).data;
-                let any = false;
-                for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
-                if (!any) continue;
-                const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
-                tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
-            }
+        await render.fillsDecoded(k.strokes);
+        const tiles = await paintTiles({ x: fx0, y: fy0, w: fx1 - fx0, h: fy1 - fy0 }, (g, ox, oy) => { g.setTransform(D, 0, 0, D, -ox, -oy); render.drawStrokes(g, k.strokes); });
         if (tiles.size) out.push({ id: k.id, name: k.name, layer: k.layer, author: k.author, frame: { x: fx0, y: fy0, w: fx1 - fx0, h: fy1 - fy0 }, tiles });
     }
     // Saved drawings drawn on here, or with others merged into them: painted again.
@@ -1162,6 +1449,39 @@ async function paintSketches(view, doc)
     for (const m of view.merges || []) again.delete(m.id);   // (one merged down goes with the one it went into)
     if (doc) for (const id of again) { const done = await repaint(doc, view, id); if (done) out.push(done); }
     return out;
+}
+// A drawing's pixels over "frame" (in its pixels) made into tiles as Board keeps them, "draw" painting them with its
+// pixel (ox, oy) at the top-left: all at once on one canvas (so paint moved from one tile to another goes with it), or,
+// for one too big for that, a tile at a time. Tiles left empty are left out.
+async function paintTiles(frame, draw)
+{
+    const T = cnpy.TILE, tiles = new Map();
+    const c0 = Math.floor(frame.x / T), r0 = Math.floor(frame.y / T), c1 = Math.floor((frame.x + frame.w - 1) / T), r1 = Math.floor((frame.y + frame.h - 1) / T);
+    const whole = (c1 - c0 + 1) * (r1 - r0 + 1) * T * T <= 36e6;
+    let all = null, ag = null;
+    if (whole)
+    {
+        all = document.createElement("canvas");
+        all.width = (c1 - c0 + 1) * T; all.height = (r1 - r0 + 1) * T;
+        ag = all.getContext("2d", { willReadFrequently: true });
+        draw(ag, c0 * T, r0 * T);
+    }
+    for (let r = r0; r <= r1; r++)
+        for (let c = c0; c <= c1; c++)
+        {
+            const cv = document.createElement("canvas");
+            cv.width = cv.height = T;
+            const g = cv.getContext("2d", { willReadFrequently: true });
+            if (whole) g.drawImage(all, (c - c0) * T, (r - r0) * T, T, T, 0, 0, T, T);
+            else draw(g, c * T, r * T);
+            const px = g.getImageData(0, 0, T, T).data;
+            let any = false;
+            for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
+            if (!any) continue;
+            const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
+            tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
+        }
+    return tiles;
 }
 // A saved drawing painted again: its tiles read back, then its strokes since it was saved, then any drawings merged
 // down into it (their tiles and strokes, at their opacity), all in its own pixels (its frame is its box), over the area
@@ -1196,41 +1516,25 @@ async function repaint(doc, view, id)
         if (l.strokes.length) { const k = render.sketchItem({ strokes: l.strokes }); grow(k.x, k.y, k.w, k.h); }
     }
     px0 = Math.floor(px0); py0 = Math.floor(py0); px1 = Math.ceil(px1); py1 = Math.ceil(py1);
+    // Every tile of them read first (the painting itself is done in one go).
     const images = new Map();
-    const image = async file => { if (!images.has(file)) images.set(file, await createImageBitmap(await doc.zip.file(file).async("blob"))); return images.get(file); };
-    const tiles = new Map();
+    let tiles;
     try
     {
-        for (let r = Math.floor(py0 / T); r <= Math.floor((py1 - 1) / T); r++)
-            for (let c = Math.floor(px0 / T); c <= Math.floor((px1 - 1) / T); c++)
+        for (const l of layers) { for (const t of l.tiles) if (!images.has(t.file)) images.set(t.file, await createImageBitmap(await doc.zip.file(t.file).async("blob"))); await render.fillsDecoded(l.strokes); }
+        tiles = await paintTiles({ x: px0, y: py0, w: px1 - px0, h: py1 - py0 }, (g, ox, oy) =>
+        {
+            for (const l of layers)
             {
-                const cv = document.createElement("canvas");
-                cv.width = cv.height = T;
-                const g = cv.getContext("2d", { willReadFrequently: true });
-                const x0 = c * T, y0 = r * T;
-                for (const l of layers)
-                {
-                    // Its tiles, from its pixels to these (through the canvas), then its strokes, from the canvas.
-                    g.globalAlpha = l.alpha;
-                    g.setTransform(l.sx / me.sx, 0, 0, l.sy / me.sy, me.a.x + (l.b.x - l.a.x * l.sx - me.b.x) / me.sx - x0, me.a.y + (l.b.y - l.a.y * l.sy - me.b.y) / me.sy - y0);
-                    for (const t of l.tiles)
-                    {
-                        // (only those that reach this tile)
-                        const tx = me.a.x + (l.b.x + (t.c * T - l.a.x) * l.sx - me.b.x) / me.sx, ty = me.a.y + (l.b.y + (t.r * T - l.a.y) * l.sy - me.b.y) / me.sy;
-                        if (tx > x0 + T || ty > y0 + T || tx + T * l.sx / me.sx < x0 || ty + T * l.sy / me.sy < y0) continue;
-                        g.drawImage(await image(t.file), t.c * T, t.r * T);
-                    }
-                    g.globalAlpha = 1;
-                    g.setTransform(1 / me.sx, 0, 0, 1 / me.sy, me.a.x - me.b.x / me.sx - x0, me.a.y - me.b.y / me.sy - y0);
-                    render.drawStrokes(g, l.strokes);
-                }
-                const px = g.getImageData(0, 0, T, T).data;
-                let any = false;
-                for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
-                if (!any) continue;
-                const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
-                tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
+                // Its tiles, from its pixels to these (through the canvas), then its strokes, from the canvas.
+                g.globalAlpha = l.alpha;
+                g.setTransform(l.sx / me.sx, 0, 0, l.sy / me.sy, me.a.x + (l.b.x - l.a.x * l.sx - me.b.x) / me.sx - ox, me.a.y + (l.b.y - l.a.y * l.sy - me.b.y) / me.sy - oy);
+                for (const t of l.tiles) g.drawImage(images.get(t.file), t.c * T, t.r * T);
+                g.globalAlpha = 1;
+                g.setTransform(1 / me.sx, 0, 0, 1 / me.sy, me.a.x - me.b.x / me.sx - ox, me.a.y - me.b.y / me.sy - oy);
+                render.drawStrokes(g, l.strokes);
             }
+        });
     }
     finally { for (const img of images.values()) img.close(); }
     const frame = { x: px0, y: py0, w: px1 - px0, h: py1 - py0 };
@@ -1254,9 +1558,37 @@ function setFull(on)
         if (!on && now) { const back = document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen ? document.webkitExitFullscreen() : null; if (back && back.catch) back.catch(() => { }); }
     }
     catch (e) { }   // (not allowed here: the bars alone put away)
-    const b = app.querySelector('.corner [data-do="fullscreen"]');
-    if (b) { b.innerHTML = icon("full"); b.setAttribute("aria-label", on ? "Exit full screen" : "Full screen"); b.title = on ? "Exit full screen" : "Full screen"; b.classList.toggle("on", on); }
+    corner();
     requestAnimationFrame(() => { if (canvasView) canvasView.resize(); });
+}
+// The screen kept on while the canvas is open (drawing, or looking it over, it would go dark), as far as the browser
+// lets a page; let go everywhere else, and asked for again when the page comes back.
+let wakeLock = null;
+async function awake()
+{
+    const want = !!project && tab === "canvas" && !document.hidden;
+    if (!want) { if (wakeLock) { const w = wakeLock; wakeLock = null; try { await w.release(); } catch (e) { } } return; }
+    if (wakeLock || !navigator.wakeLock) return;
+    try { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } catch (e) { wakeLock = null; }
+}
+document.addEventListener("visibilitychange", () => awake());
+render.filled.onReady = () => redrawViewers();   // (a fill's picture decoded: drawn)
+
+// The canvas's own buttons, top right: Draw (lit while drawing), the Hierarchy, Fit everything (in full screen, Undo:
+// the top bar's is put away), and Full screen (in it, the way out).
+function corner()
+{
+    const c = app.querySelector("#tab .corner");
+    if (!c || !project) return;
+    const shut = project.base.doc.readOnly;
+    c.innerHTML = (shut ? "" : iconButton("draw", "brush", pen ? "Done drawing" : "Draw")) + iconButton("hierarchy", "layers", "Hierarchy")
+        + (full ? (shut ? "" : iconButton("undo", "undo", "Undo", "", !undos.length)) : iconButton("fitall", "fit", "Fit everything"))
+        + iconButton("fullscreen", "full", full ? "Exit full screen" : "Full screen");
+    const d = c.querySelector('[data-do="draw"]');
+    if (d) d.classList.toggle("on", !!pen);
+    const f = c.querySelector('[data-do="fullscreen"]');
+    if (f) f.classList.toggle("on", full);
+    wire(c);
 }
 // Left by the phone's own way out (the back gesture, Escape): out of it here too.
 for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) document.addEventListener(ev, () => { if (full && !document.fullscreenElement && !document.webkitFullscreenElement) setFull(false); });
@@ -1271,7 +1603,7 @@ function layerLocked(id) { const doc = project.base.doc, v = project.view; retur
 function hierarchyModel()
 {
     const doc = project.base.doc, sc = project.scene, inDoc = new Set(doc.items.map(o => o.id));
-    const names = new Map(doc.empties.map(e => [e.id, e.name]));
+    const names = new Map(doc.empties.concat(project.view.newLayers || []).map(e => [e.id, e.name]));
     const layers = [], byLayer = new Map();
     const layerOfItem = o =>
     {
@@ -1285,10 +1617,12 @@ function hierarchyModel()
         if (!byLayer.has(id)) { byLayer.set(id, []); layers.push(id); }
         byLayer.get(id).push(o);
     }
+    for (const e of (project.view.newLayers || []).slice().reverse()) if (!byLayer.has(e.id)) { byLayer.set(e.id, []); layers.unshift(e.id); }   // (made here: on top)
     for (const e of doc.empties) if (!byLayer.has(e.id)) { byLayer.set(e.id, []); layers.push(e.id); }
     return { layers: layers.map(id => ({ id, name: id ? names.get(id) || "Layer" : "No layer", items: byLayer.get(id) })), inDoc };
 }
-function objectName(o) { return o.kind === "sketch" ? (o.name || "Drawing") + " (not saved yet)" : o.name || kindName(o.id); }
+// An object's name in the hierarchy: a drawing with strokes not yet saved marked * (as Board marks what is unsaved).
+function objectName(o) { return (o.name || kindName(o.id)) + (o.kind === "sketch" || o.strokes ? "*" : ""); }
 function kindIcon(o)
 {
     return { image: "photo", paint: "draw", sketch: "draw", list: "lists", rect: "kind-rect", oval: "kind-oval", line: "kind-line", arrow: "kind-arrow", path: "kind-path", type: "kind-type" }[o.kind] || "kind-rect";
@@ -1301,7 +1635,7 @@ function hierarchy()
     const build = () =>
     {
         const m = hierarchyModel(), drawing = !!pen;
-        let h = '<div class="ptitle htitle"><span>Layers</span>' + (shut ? "" : '<button class="quiet-button" data-do="hnew">' + icon("plus", 16) + "<span>New drawing</span></button>") + "</div><div class=\"hlist\">";
+        let h = '<div class="ptitle htitle"><span>Hierarchy</span>' + (shut ? "" : '<span class="hhead"><button class="hbtn" data-do="hnewlayer" aria-label="New layer" title="New layer">' + icon("folder", 20) + '</button><button class="hbtn" data-do="hnew" aria-label="New drawing" title="New drawing">' + icon("adddrawing", 20) + "</button></span>") + "</div><div class=\"hlist\">";
         for (const l of m.layers)
         {
             const lid = l.id || "", hid = l.id && project.scene.hides.has(l.id), lk = l.id && layerLocked(l.id), fold = foldedLayers.has(lid);
@@ -1329,7 +1663,16 @@ function hierarchy()
     {
         const o = project.scene.items.find(x => x.id === value);
         if (does === "hfold") { if (foldedLayers.has(value)) foldedLayers.delete(value); else foldedLayers.add(value); again(); return; }
-        if (does === "hnew") { drawOnto(null); if (!pen) drawMode(); else tools(v); toast("The next stroke starts a new drawing"); close(() => { }); return; }
+        if (does === "hnewlayer")
+        {
+            const doc2 = project.base.doc, taken = new Set(doc2.empties.concat(project.view.newLayers || []).map(e => e.name));
+            for (const x of doc2.items) { const l = cnpy.layerOf(doc2, x); if (l) taken.add(l.name); }
+            let n = 1; while (taken.has("Layer " + n)) n++;
+            const top = hierarchyModel().layers.find(l => l.id);
+            step({ t: "newlayer", list: null, id: cnpy.newId(), name: "Layer " + n, below: top ? top.id : null });
+            again(); return;
+        }
+        if (does === "hnew") { drawOnto(null); if (!pen) drawMode(); else tools(v); toast("Your next stroke starts a new drawing"); close(() => { }); return; }
         if (does === "hlayerhide") { step({ t: "hidelayer", list: null, id: value, on: !project.scene.hides.has(value) }); redrawViewers(); again(); return; }
         if (does === "hlayerlock") { const lk = layerLocked(value); step(lk ? { t: "lock", list: null, ids: [], on: false, groups: [value] } : { t: "lock", list: null, ids: [], on: true, relock: [value] }); if (picked) tools(picked.viewer); redrawViewers(); again(); return; }
         if (!o) return;
@@ -1372,12 +1715,17 @@ function moveRow(row, e, sheet)
         before = rows().find(r => r.offsetTop + r.offsetHeight / 2 > y && !(r.classList.contains("hlayer") && r === rows()[0])) || null;
         line.style.top = (before ? before.offsetTop : list.scrollHeight) - 1 + "px";
     };
-    const up = () =>
+    let done = false;
+    const up = ev =>
     {
+        if (done) return;
+        done = true;
         handle.removeEventListener("pointermove", move);
         handle.removeEventListener("pointerup", up);
         handle.removeEventListener("pointercancel", up);
+        handle.removeEventListener("lostpointercapture", up);
         row.classList.remove("lifted"); row.style.transform = ""; line.remove();
+        if (ev && ev.type !== "pointerup") return;   // (cancelled, or taken away: put back as it was)
         const all = rows(), at = before ? all.indexOf(before) : all.length;
         // Into the layer whose heading is above the line; above the first object of the file's below it.
         let layer = null;
@@ -1387,20 +1735,19 @@ function moveRow(row, e, sheet)
         const id = row.dataset.id, o = doc.items.find(x => x.id === id);
         if (!o) return;
         const now = cnpy.layerOf(doc, o), was = cnpy.movedTo(project.view, id) || now;
-        const names = new Map(doc.empties.map(x => [x.id, x.name]));
+        const names = new Map(doc.empties.concat(project.view.newLayers || []).map(x => [x.id, x.name]));
         for (const x of doc.items) { const l = cnpy.layerOf(doc, x); if (l) names.set(l.id, l.name); }
         const into = layer && (!was || was.id !== layer) ? { id: layer, name: names.get(layer) || "Layer" } : null;
         // (just above the one below where it was let go, which in drawing order is just after it; none: the bottom)
         step({ t: "zorder", list: null, id, after: below ? below.dataset.id : null, layer: into });
         feel.drop();
         redrawViewers();
-        const pk = app.querySelector(".picker");
-        if (pk) pk.remove();
-        hierarchy();
+        if (sheet.again) sheet.again();   // (drawn anew where it is)
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
+    handle.addEventListener("lostpointercapture", up);
 }
 // An object's menu, from its row: rename, duplicate, delete; a drawing's: draw on it, merge it down.
 function objectMenu(o)
@@ -1408,7 +1755,7 @@ function objectMenu(o)
     const v = boardView || canvasView, doc = project.base.doc;
     const isPaint = o.kind === "paint" && doc.items.some(x => x.id === o.id);
     const below = isPaint ? drawingBelow(o) : null;
-    const build = () => '<div class="ptitle">' + text(objectName(o)) + "</div>"
+    const build = () => '<div class="ptitle mtitle"><button class="hbtn" data-do="back" aria-label="Back to the hierarchy">' + icon("back", 18) + "</button><span>" + text(kindName(o.id) + " \u00b7 " + objectName(o)) + "</span></div>"
         + '<button class="pick" data-do="rename"><span>Rename</span></button>'
         + '<button class="pick" data-do="duplicate"><span>Duplicate</span></button>'
         + (o.kind === "paint" ? '<button class="pick" data-do="drawon"><span>Draw on this drawing</span></button>' : "")
@@ -1416,6 +1763,7 @@ function objectMenu(o)
         + '<button class="pick danger" data-do="delete"><span>Delete</span></button>';
     sheetUp(build, (does, value, close) =>
     {
+        if (does === "back") { close(() => hierarchy()); return; }
         if (does === "rename")
         {
             const name = prompt("Name", o.name || "");
@@ -1457,6 +1805,29 @@ function drawingBelow(o)
 }
 
 // The photo button: a photo from the phone, or the image it has copied (from a web page, say).
+// The canvas's +: a photo, a picture copied, or a new list, in the middle of what the canvas shows.
+function addMenu(btn)
+{
+    if (!btn) return;
+    const was = app.querySelector(".addmenu");
+    if (was) { was.remove(); return; }
+    const m = element('<div class="addmenu" role="menu">'
+        + '<button data-act="photo">' + icon("photo", 20) + "<span>Photo</span></button>"
+        + '<button data-act="paste">' + icon("copy", 20) + "<span>Paste image</span></button>"
+        + '<button data-act="list">' + icon("lists", 20) + "<span>New list</span></button></div>");
+    const r = btn.getBoundingClientRect();
+    m.style.top = r.bottom + 6 + "px";
+    m.style.right = Math.max(8, innerWidth - r.right) + "px";
+    document.body.appendChild(m);
+    if (!calm) m.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }], { duration: 150, easing: "cubic-bezier(.2,.9,.3,1)" });
+    const gone = () => { m.remove(); document.removeEventListener("pointerdown", away, true); };
+    const away = e => { if (!m.contains(e.target) && !btn.contains(e.target)) gone(); };
+    setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
+    // (each done at once, in the tap: a phone only shows its photos, or lets a page read what is copied, then)
+    m.querySelector('[data-act="photo"]').addEventListener("click", () => { gone(); app.querySelector("#photo-picker").click(); });
+    m.querySelector('[data-act="paste"]').addEventListener("click", () => { const got = readClipboard(); gone(); got.then(placeCopied); });
+    m.querySelector('[data-act="list"]').addEventListener("click", () => { gone(); newList(canvasView ? canvasView.middle() : null); });
+}
 function photoMenu()
 {
     const build = () => '<div class="actions"><button class="action" data-do="choose">' + icon("photo", 18) + "<span>Choose a photo</span></button>"
@@ -1531,7 +1902,7 @@ function openLink(href, v)
 function kindName(id)
 {
     const o = project.scene.items.find(x => x.id === id);
-    return o ? ({ image: "Image", type: "Type", paint: "Drawing", rect: "Shape", oval: "Shape", path: "Path", line: "Line", arrow: "Arrow" }[o.kind] || "Object") : "Object";
+    return o ? ({ image: "Image", type: "Type", paint: "Drawing", sketch: "Drawing", list: "List", rect: "Shape", oval: "Shape", path: "Path", line: "Line", arrow: "Arrow" }[o.kind] || "Object") : "Object";
 }
 let toastTimer = null;
 function toast(words)
@@ -1935,10 +2306,11 @@ async function addPhoto(file)
 
 // A new list: on the canvas clear of everything, to the right of it all and level with the top of the other lists,
 // opened to be named (it can be moved where it belongs on the desktop).
-function newList()
+function newList(at)
 {
+    // (from the canvas: in the middle of what it shows; else to the right of everything)
     const doc = project.base.doc, lists = project.view.lists, e = render.extent(project.scene);
-    const x = e.x + e.w + 80, y = lists.length ? Math.min(...lists.map(l => l.y)) : e.y;
+    const x = at ? at.x - cnpy.LIST_W / 2 : e.x + e.w + 80, y = at ? at.y - 120 : lists.length ? Math.min(...lists.map(l => l.y)) : e.y;
     const id = cnpy.newId();
     step({ t: "newlist", list: id, x, y, name: "", layer: cnpy.topLayer(doc), author: dbx.who() });
     stepTo({ kind: "list", id });
@@ -2027,7 +2399,7 @@ async function saveCopy()
 
 function failed(e)
 {
-    problem = e instanceof dbx.SignedOut ? "Signed out of Dropbox: sign in again." : e.message || String(e);
+    problem = e instanceof dbx.SignedOut ? "Signed out of Dropbox. Sign in again." : e.message || String(e);
     if (e instanceof dbx.SignedOut) project = null;
     show();
 }
@@ -2240,6 +2612,7 @@ function sheetUp(build, chose)
         panel.querySelectorAll("[data-do]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); if (!closing) chose(b.dataset.do, b.dataset.value, close, again); }));
     };
     again();
+    sheet.again = again;   // (drawn anew from outside: the hierarchy, after a row is moved)
     // (The finger that held an entry down to open this is still on the glass: its lift is no tap on the shade. Only a
     // press that starts on the shade, after it is up, closes it.)
     const since = performance.now();
@@ -2463,7 +2836,7 @@ function follow(id)
 {
     finishTyping(false, false);
     const sc = project.scene, to = render.linked(sc, id);
-    if (!to) { problem = "What it linked to isn't in the project any more."; return show(); }
+    if (!to) { problem = "What it linked to is no longer in the project."; return show(); }
     if (to.board) { openBoard(to.board.id, null); return; }
     if (to.item && to.item.kind === "list") { openList(to.item.id, null); return; }
     open = null; tab = "canvas"; remember("canopy.tab", tab);
@@ -2571,6 +2944,7 @@ function act(what, value, ev, el)
         }
         case "photo": photoMenu(); break;
         case "draw": drawMode(); break;
+        case "addmenu": addMenu(el); break;
         case "hierarchy": hierarchy(); break;
         case "fullscreen": setFull(!full); break;
         case "arrange": finishTyping(false, false); arranging = !arranging; editing = null; show(); break;
