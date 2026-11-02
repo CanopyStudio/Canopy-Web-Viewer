@@ -93,9 +93,9 @@ export class Viewer
         g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
         g.drawImage(wet.under, 0, 0);
         const pts = wet.pts, n = pts ? pts.length : 0;
-        if (n && wet.ahead && wet.ahead.length) pts.push(...wet.ahead);   // (the guessed points, for this frame only)
+        if (n && wet.ahead && wet.ahead.length) { pts.push(...wet.ahead); pts.ahead = wet.ahead.length / 3; }   // (the guessed points, for this frame only)
         render.draw(g, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { part: { from: at, to: at + 1 } });
-        if (n) pts.length = n;
+        if (n) { pts.length = n; pts.ahead = 0; }
         g.setTransform(1, 0, 0, 1, 0, 0);
         g.drawImage(wet.over, 0, 0);
         return true;

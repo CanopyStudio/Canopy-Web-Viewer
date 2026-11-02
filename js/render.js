@@ -354,7 +354,7 @@ export function scene(doc, view)
         // Drawings made here, on top until saved; strokes on a saved one, drawn with it (its pixels and them together).
         if (!k.base) { items.push(sketchItem(k)); continue; }
         const at = items.findIndex(o => o.id === k.base);
-        if (at >= 0) items[at] = { ...items[at], strokes: k.strokes };
+        if (at >= 0) items[at] = { ...items[at], strokes: k.strokes, reach: reachOf(items[at], [sketchItem(k)]) };
     }
     for (const m of view.merges || [])
     {
@@ -363,7 +363,8 @@ export function scene(doc, view)
         if (at < 0 || !up) continue;
         const k = (view.sketches || []).find(x => x.base === m.id);
         const q = own(up);
-        items[at] = { ...items[at], merged: (items[at].merged || []).concat([k ? { ...q, strokes: k.strokes } : q]) };
+        const with2 = k ? { ...q, strokes: k.strokes } : q;
+        items[at] = { ...items[at], merged: (items[at].merged || []).concat([with2]), reach: reachOf(items[at], [q].concat(k ? [sketchItem(k)] : [])) };
     }
     for (const p of view.photos) items.push({ kind: "image", locked: !!p.locked, id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
     const masks = new Map();   // a clipped group's path → its mask (the topmost of it, marked as one)
@@ -388,6 +389,14 @@ export function box(o, ctx)
 {
     if (o.kind === "list") return { x: o.x, y: o.y, w: o.w, h: listLayout(o, ctx).h * o.scale };
     return { x: o.x, y: o.y, w: o.w, h: o.h };
+}
+// How far a drawing reaches with what is drawn on it here (strokes, or one merged into it, past its own box): what
+// says whether it is in view, so it isn't left out once only the new part is.
+function reachOf(o, more)
+{
+    const all = [o.reach || outer(o)].concat(more.map(m => outer(m)));
+    const x0 = Math.min(...all.map(b => b.x)), y0 = Math.min(...all.map(b => b.y)), x1 = Math.max(...all.map(b => b.x + b.w)), y1 = Math.max(...all.map(b => b.y + b.h));
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 export function outer(o, ctx)
 {
@@ -448,7 +457,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
     for (const o of part ? sc.items.slice(part.from, part.to) : sc.items)
     {
         if (hidden(sc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
-        if (!meets(outer(o, ctx))) continue;
+        if (!meets(o.reach || outer(o, ctx))) continue;
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(1, fade(doc, o)));
         ctx.globalCompositeOperation = o.blend && o.blend !== "normal" ? o.blend : "source-over";
@@ -488,10 +497,10 @@ export function sketchItem(k)
     if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
     return { kind: "sketch", id: k.id, name: k.name, strokes: k.strokes, x: x0, y: y0, w: x1 - x0, h: y1 - y0, group: k.layer ? k.layer.id : null, opacity: 1, blend: "normal", angle: 0, shear: 0 };
 }
-// Strokes drawn onto a canvas set to canvas units: Ink's line as wide as it is pressed, the Flat's a flat tip swept
-// along with its bristles showing, an eraser rubbing out (on the drawing's own canvas: only what is drawn there). A
-// stroke less than fully opaque, or the Flat (its bristles rub out only its own paint), is drawn on a canvas of its
-// own first and laid on as a whole, so where it crosses itself it is no stronger.
+// Strokes drawn onto a canvas set to canvas units: Ink's line as wide as it is pressed, the Flat's its roughened tip
+// stamped along, an eraser rubbing out (on the drawing's own canvas: only what is drawn there). A
+// stroke less than fully opaque is drawn on a canvas of its own first and laid on as a whole, so where it crosses
+// itself it is no stronger.
 export function drawStrokes(g, strokes)
 {
     for (const st of strokes)
@@ -501,7 +510,7 @@ export function drawStrokes(g, strokes)
         if (n === 0) continue;
         const alpha = st.kind === "marker" ? 0.55 : st.opacity === undefined ? 1 : st.opacity;   // (a marker: drawn here before 0.7.17)
         const op = st.kind === "erase" ? "destination-out" : "source-over";
-        if (alpha >= 1 && st.kind !== "flat")
+        if (alpha >= 1)
         {
             g.save(); g.globalCompositeOperation = op; strokeInto(g, st); g.restore();
             continue;
@@ -519,20 +528,20 @@ export function drawStrokes(g, strokes)
         const L = Math.max(0, Math.floor(Math.min(...corners.map(c => c[0])))), T = Math.max(0, Math.floor(Math.min(...corners.map(c => c[1]))));
         const R = Math.min(W, Math.ceil(Math.max(...corners.map(c => c[0])))), B = Math.min(H, Math.ceil(Math.max(...corners.map(c => c[1]))));
         if (R <= L || B <= T) continue;
-        if (!own) own = document.createElement("canvas");
-        if (own.width < R - L || own.height < B - T) { own.width = Math.max(own.width, R - L); own.height = Math.max(own.height, B - T); }
-        const o = own.getContext("2d");
+        if (!alone) alone = document.createElement("canvas");
+        if (alone.width < R - L || alone.height < B - T) { alone.width = Math.max(alone.width, R - L); alone.height = Math.max(alone.height, B - T); }
+        const o = alone.getContext("2d");
         o.setTransform(1, 0, 0, 1, 0, 0); o.globalAlpha = 1; o.globalCompositeOperation = "source-over"; o.clearRect(0, 0, R - L, B - T);
         o.setTransform(m.a, m.b, m.c, m.d, m.e - L, m.f - T);
         strokeInto(o, st);
         g.save();
         g.setTransform(1, 0, 0, 1, 0, 0);
         g.globalAlpha *= alpha; g.globalCompositeOperation = op;
-        g.drawImage(own, 0, 0, R - L, B - T, L, T, R - L, B - T);
+        g.drawImage(alone, 0, 0, R - L, B - T, L, T, R - L, B - T);
         g.restore();
     }
 }
-let own = null;   // (a stroke drawn on its own: one canvas, used again)
+let alone = null;   // (a stroke drawn on its own: one canvas, used again)
 
 // One stroke's paint, at full strength, onto "g" (set to canvas units).
 function strokeInto(g, st)
@@ -565,59 +574,86 @@ function strokeInto(g, st)
     }
 }
 
-// The Flat, simply (Board's Flat brush, more simply made): a flat oval tip held level, as a broad nib is, swept along,
-// so the line is broad going up and down and thinner going across; as wide as it is pressed. Then its bristles: thin
-// lines along the way, from points spread over the tip, rubbing the paint thinner, more of them toward its sides and
-// broken there, so the edges look worn. Where they fall is from the stroke's own id, so it looks the same each time.
-const FLAT = 0.62;   // (the tip's thickness, of its width)
-function flatInto(g, st)
+// The Flat, as Board's Flat brush with no bristles: its tip (Board's TipShape.Flat: a rounded rectangle, its edge
+// broken into lobes with notches between and a fine wobble over that), held level, stamped close together all along
+// the stroke, so its ends and sides come out roughened as Board's do; as wide as it is pressed. The stamps made so far
+// are kept with the stroke, so a long one isn't stamped over again each time it is drawn.
+const FLAT = { aspect: 0.42, corner: 0.62, lobes: 13, depth: 0.214, wobble: 0.029, seed: 3 };
+let flatTip = null;   // its outline, across -0.5 to 0.5 of the tip's width and of its thickness
+function tipOutline()
 {
-    const p = st.pts, n = p.length / 3;
-    const half = i => st.size * Math.max(0.35, p[i * 3 + 2]) / 2;
-    const path = new Path2D();
+    if (flatTip) return flatTip;
+    const n = 160, { aspect, corner, lobes, depth, wobble } = FLAT;
+    const a = 0.5, b = 0.5 * aspect, rc = Math.max(1e-4, corner * b), ex = a - rc, ey = b - rc, thick = 2 * b;
+    const quarter = Math.PI / 2 * rc, len = 4 * ex + 4 * ey + 4 * quarter;
+    let seed = FLAT.seed;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const waves = [], fine = [];
+    for (let f = Math.max(1, Math.round(lobes * 0.3)); f < Math.round(lobes * 0.75); f++) waves.push([f, Math.pow(f, -0.3), rnd() * 6.28]);
+    for (let f = Math.round(lobes * 2.3); f < lobes * 4.6; f += 2) fine.push([f, 1, rnd() * 6.28]);
+    const wave = (ws, th) => { let v = 0, sq = 0; for (const w of ws) { v += w[1] * Math.sin(w[0] * th + w[2]); sq += w[1] * w[1]; } return sq === 0 ? 9 : v / Math.sqrt(sq / 2); };
+    const dir = [0, 1, -1, 0, 0, -1, 1, 0];
+    const pts = [];
     for (let i = 0; i < n; i++)
     {
-        const x = p[i * 3], y = p[i * 3 + 1], a = half(i);
-        path.moveTo(x + a, y); path.ellipse(x, y, a, a * FLAT, 0, 0, Math.PI * 2);
-        if (i === 0) continue;
-        // (the band between this tip and the last: the oval's edge points facing across the way it went)
-        const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], a0 = half(i - 1), dx = x - x0, dy = y - y0;
-        if (dx === 0 && dy === 0) continue;
-        const u = dx, v = dy / FLAT, l = Math.hypot(u, v) || 1, ex = -v / l, ey = u / l;
-        const q = [[x0 + ex * a0, y0 + ey * a0 * FLAT], [x + ex * a, y + ey * a * FLAT], [x - ex * a, y - ey * a * FLAT], [x0 - ex * a0, y0 - ey * a0 * FLAT]];
-        let area = 0;
-        for (let k = 0; k < 4; k++) { const [ax, ay] = q[k], [bx, by] = q[(k + 1) % 4]; area += ax * by - bx * ay; }
-        if (area < 0) q.reverse();   // (each band wound the way the ovals are, so where they overlap there is no gap)
-        path.moveTo(q[0][0], q[0][1]); for (let k = 1; k < 4; k++) path.lineTo(q[k][0], q[k][1]); path.closePath();
-    }
-    g.fill(path, "nonzero");
-    if (n < 2) return;
-    // The bristles.
-    let seed = 0;
-    for (const c of String(st.sid || "flat")) seed = (seed * 31 + c.charCodeAt(0)) >>> 0;
-    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-    g.save();
-    g.globalCompositeOperation = "destination-out";
-    g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = "#000";
-    const count = 18;
-    for (let k = 0; k < count; k++)
-    {
-        // (most toward its sides, where the paint runs out first; a few faint ones through the middle)
-        const side = rnd() < 0.5 ? -1 : 1, out = Math.pow(rnd(), 0.45), u = side * out, v = (rnd() * 2 - 1) * Math.sqrt(Math.max(0, 1 - u * u)) * 0.9;
-        const edge = out > 0.72;
-        g.globalAlpha = edge ? 0.6 + rnd() * 0.4 : 0.1 + rnd() * 0.2;
-        g.lineWidth = st.size * (edge ? 0.02 + rnd() * 0.025 : 0.01 + rnd() * 0.015);
-        if (edge) { const d = st.size * (1.5 + rnd() * 4); g.setLineDash([d, d * (0.15 + rnd() * 0.35)]); g.lineDashOffset = rnd() * d; } else g.setLineDash([]);
-        g.beginPath();
-        for (let i = 0; i < n; i++)
+        // (along the rounded rectangle by distance, so the lobes keep their size round the corners)
+        let q = i * len / n, x = 0, y = 0, nx = 0, ny = 0;
+        for (let k = 0; k < 8; k++)
         {
-            const a = half(i), bx = p[i * 3] + u * a, by = p[i * 3 + 1] + v * a * FLAT;
-            if (i === 0) g.moveTo(bx, by);
-            else { const a1 = half(i - 1), mx = (p[(i - 1) * 3] + u * a1 + bx) / 2, my = (p[(i - 1) * 3 + 1] + v * a1 * FLAT + by) / 2; g.quadraticCurveTo(p[(i - 1) * 3] + u * a1, p[(i - 1) * 3 + 1] + v * a1 * FLAT, mx, my); }
+            const l = k % 2 === 1 ? quarter : k % 4 === 0 ? 2 * ey : 2 * ex;
+            if (q > l && k < 7) { q -= l; continue; }
+            const side = k >> 1;
+            if (k % 2 === 1)
+            {
+                const t = side * Math.PI / 2 + q / rc;
+                nx = Math.cos(t); ny = Math.sin(t);
+                x = (side === 0 || side === 3 ? ex : -ex) + rc * nx; y = (side < 2 ? ey : -ey) + rc * ny;
+            }
+            else
+            {
+                nx = dir[side * 2 + 1]; ny = -dir[side * 2];
+                x = (side === 0 ? a : side === 2 ? -a : side === 1 ? ex : -ex) + dir[side * 2] * q;
+                y = (side === 1 ? b : side === 3 ? -b : side === 0 ? -ey : ey) + dir[side * 2 + 1] * q;
+            }
+            break;
         }
-        g.stroke();
+        const th = i * Math.PI * 2 / n, lobe = wave(waves, th), wob = wave(fine, th);
+        const dent = thick * (depth * Math.exp(-3 * lobe * lobe) + wobble * Math.max(0, 1 - Math.abs(wob) / 0.8));
+        pts.push((x - dent * nx) * 0.92, (y - dent * ny) / thick * 0.92);
     }
-    g.restore();
+    return flatTip = pts;
+}
+const stamped = new WeakMap();   // a Flat stroke: { path, upto (its points stamped), carry (along since the last stamp), at }
+function flatInto(g, st)
+{
+    const p = st.pts, solid = p.length / 3 - (p.ahead || 0), tip = tipOutline();
+    const width = i => st.size * Math.max(0.35, p[i * 3 + 2]);
+    const stamp = (path, x, y, w) =>
+    {
+        const h = w * FLAT.aspect;
+        path.moveTo(x + tip[0] * w, y + tip[1] * h);
+        for (let k = 2; k < tip.length; k += 2) path.lineTo(x + tip[k] * w, y + tip[k + 1] * h);
+        path.closePath();
+    };
+    // Stamps a small share of the tip's width apart, from point "from" on (carrying on from "c"): what is left over.
+    const along = (path, from, to, c) =>
+    {
+        for (let i = from; i < to; i++)
+        {
+            if (i === 0) { stamp(path, p[0], p[1], width(0)); continue; }
+            const x0 = p[(i - 1) * 3], y0 = p[(i - 1) * 3 + 1], x1 = p[i * 3], y1 = p[i * 3 + 1], d = Math.hypot(x1 - x0, y1 - y0);
+            const w0 = width(i - 1), w1 = width(i), step = Math.max(0.4, Math.min(w0, w1) * 0.04);
+            let t = step - c;
+            while (t <= d) { const u = d ? t / d : 1; stamp(path, x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, w0 + (w1 - w0) * u); t += step; }
+            c = d - (t - step);
+        }
+        return c;
+    };
+    let kept = stamped.get(st);
+    if (!kept || kept.upto > solid || kept.size !== st.size) { kept = { path: new Path2D(), upto: 0, carry: 0, size: st.size }; stamped.set(st, kept); }
+    if (solid > kept.upto) { kept.carry = along(kept.path, kept.upto, solid, kept.carry); kept.upto = solid; }
+    g.fill(kept.path, "nonzero");
+    if (p.length / 3 > solid) { const ahead = new Path2D(); along(ahead, solid, p.length / 3, kept.carry); g.fill(ahead, "nonzero"); }   // (points guessed ahead: this time only)
 }
 // A fill (a picture of what it filled, made when it was tapped), a selection rubbed out ("clear"), or one moved ("move":
 // the paint inside its outline taken out and put back "dx", "dy" along): drawn onto what the drawing has so far.
