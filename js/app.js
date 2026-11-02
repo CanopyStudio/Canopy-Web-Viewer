@@ -8,6 +8,7 @@ import * as render from "./render.js";
 import { Viewer, thumbnail } from "./viewer.js";
 import { boardIcons } from "./icons.js";
 import { themes, sizes } from "./look.js";
+import { toned } from "./tone.js";
 import { VERSION } from "./version.js";
 
 const app = document.getElementById("app");
@@ -81,12 +82,17 @@ function remember(key, v) { try { if (v === null) localStorage.removeItem(key); 
 
 // ---- the look: one of Canopy Board's themes (its colors as they are there), and its sizes, a little bigger for fingers ----
 
-let theme = remembered("canopy.theme", "Forest");
+// The first theme by its order is the one a new install starts with (Midnight), as in Board; the tone (Dark, Default,
+// Light) is a choice of its own, made over whichever theme it is.
+const firstTheme = Object.keys(themes).sort((a, b) => themes[a].order - themes[b].order)[0];
+let theme = remembered("canopy.theme", firstTheme), tone = remembered("canopy.tone", "default");
+let shown;   // the theme's colors as shown, in the tone
 function applyTheme(name)
 {
-    if (!themes[name]) name = "Forest";
+    if (!themes[name]) name = firstTheme;
     theme = name;
-    const c = themes[name].colors, root = document.documentElement.style, z = sizes;
+    shown = toned(themes[name].colors, tone);
+    const c = shown, root = document.documentElement.style, z = sizes;
     const v = { canvas: c.Canvas, chrome: c.Chrome, card: c.Card, button: c.Button, border: c.Border, ink: c.Ink, muted: c.Muted, heading: c.Heading,
         accent: c.Accent, "accent-deep": c["Accent deep"], note: c.Note, "note-row": c["Note row"], "note-edge": c["Note edge"], field: c.Field,
         "field-edge": c["Field edge"], chosen: c.Chosen, faded: c.Faded, notice: c.Notice, guide: c.Guide };
@@ -166,7 +172,7 @@ function undoButtons() { return !project || project.base.doc.readOnly ? "" : ico
 // Behind the app, the color of whatever is along the bottom of the screen.
 function footColor()
 {
-    const c = themes[theme].colors, l = current();
+    const c = shown, l = current();
     document.documentElement.style.backgroundColor = picture ? "#000" : l ? render.listLook(l).card : project ? (open ? c.Canvas : c.Chrome) : c.Canvas;
 }
 
@@ -854,18 +860,18 @@ function drawPicked(v, ctx)
     if (lifted)
     {
         ctx.save(); ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
-        ctx.strokeStyle = themes[theme].colors.Heading; ctx.globalAlpha = 0.6; ctx.lineWidth = 3; ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
+        ctx.strokeStyle = shown.Heading; ctx.globalAlpha = 0.6; ctx.lineWidth = 3; ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
         ctx.restore();
     }
-    const tone = themes[theme].colors;
-    ctx.strokeStyle = pickedLocked() ? tone.Muted : tone.Heading; ctx.lineWidth = 1.5;
+    const look = shown;
+    ctx.strokeStyle = pickedLocked() ? look.Muted : look.Heading; ctx.lineWidth = 1.5;
     ctx.setLineDash(pickedLocked() ? [5, 4] : []);
     ctx.strokeRect(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5, Math.round(c.x - a.x), Math.round(c.y - a.y));
     if (pickedLocked()) return;   // (locked: no handles)
     for (const h of corners(v))
     {
         ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(h.x, h.y, lifted ? 9 : 7, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = tone.Accent; ctx.lineWidth = 2; ctx.stroke();
+        ctx.strokeStyle = look.Accent; ctx.lineWidth = 2; ctx.stroke();
     }
 }
 // Whether what is picked is locked (any of it: itself, or a group or layer it is in).
@@ -2143,7 +2149,8 @@ function follow(id)
 function accountMenu()
 {
     const build = () => '<div class="ptitle">' + (dbx.who() ? "Signed in as " + text(dbx.who()) : "Signed in to Dropbox") + "</div>"
-        + '<div class="section first">Theme</div><div class="themes">' + Object.keys(themes).map(n => '<button class="theme' + (n === theme ? " on" : "") + '" data-do="theme" data-value="' + n + '" style="--a:' + themes[n].colors.Accent + ";--c:" + themes[n].colors.Card + '"><i></i><span>' + n + "</span></button>").join("") + "</div>"
+        + '<div class="section first">Theme</div><div class="themes">' + Object.keys(themes).sort((a, b) => themes[a].order - themes[b].order).map(n => '<button class="theme' + (n === theme ? " on" : "") + '" data-do="theme" data-value="' + n + '" style="--a:' + toned(themes[n].colors, tone).Accent + ";--c:" + toned(themes[n].colors, tone).Card + '"><i></i><span>' + n + "</span></button>").join("") + "</div>"
+        + '<div class="section">Tone</div><div class="tones">' + [["dark", "Dark"], ["default", "Default"], ["light", "Light"]].map(([v, w]) => '<button class="tone' + (v === tone ? " on" : "") + '" data-do="tone" data-value="' + v + '">' + w + "</button>").join("") + "</div>"
         + '<div class="section">Other</div>'
         + '<button class="pick" data-do="onecolumn" role="switch" aria-checked="' + oneColumn + '"><span>Lists in one column</span><span class="switch' + (oneColumn ? " on" : "") + '"><i></i></span></button>'
         + '<button class="pick" data-do="sound" role="switch" aria-checked="' + sound + '"><span>Sounds</span><span class="switch' + (sound ? " on" : "") + '"><i></i></span></button>'
@@ -2160,6 +2167,7 @@ function accountMenu()
             return;
         }
         if (does === "theme") { applyTheme(value); remember("canopy.theme", value); click(1100, true); again(); return; }
+        if (does === "tone") { tone = value; remember("canopy.tone", value); applyTheme(theme); click(1100, true); again(); return; }
         if (does === "sound")
         {
             // (flipped where it is, so it slides)
@@ -2339,7 +2347,7 @@ if (standalone)
 // ---- a newer version published: said so, and taken on a tap (each file fetched fresh first, so the phone doesn't
 // keep any of the old ones) ----
 
-const FILES = ["index.html", "app.css", "js/app.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/version.js"];
+const FILES = ["index.html", "app.css", "js/app.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js"];
 let newer = null;
 async function checkVersion()
 {

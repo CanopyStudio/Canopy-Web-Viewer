@@ -1,8 +1,33 @@
 // Canopy Board's themes and sizes, as its own files have them (Board/Themes, Board/style.json): written by
 // tools/from-board.py, not by hand. The viewer uses them as they are, its corners and type a little bigger for fingers.
 export const themes = {
-    "Forest": {
+    "Midnight": {
         "order": 1,
+        "about": "Near-neutral grays, a calmer violet.",
+        "colors": {
+            "Canvas": "#16151C",
+            "Chrome": "#16151C",
+            "Card": "#211F28",
+            "Button": "#34323E",
+            "Border": "#3B3946",
+            "Ink": "#E6E6EA",
+            "Muted": "#9B95A9",
+            "Heading": "#BEAEF2",
+            "Accent": "#7746D7",
+            "Accent deep": "#512CA7",
+            "Note": "#2B2934",
+            "Note row": "#373441",
+            "Note edge": "#4B4856",
+            "Field": "#18171E",
+            "Field edge": "#3B3946",
+            "Chosen": "#392F4C",
+            "Faded": "#615D68",
+            "Notice": "#FE50BB",
+            "Guide": "#27FF98"
+        }
+    },
+    "Forest": {
+        "order": 2,
         "about": "A quiet green.",
         "colors": {
             "Canvas": "#121918",
@@ -27,7 +52,7 @@ export const themes = {
         }
     },
     "Sand": {
-        "order": 2,
+        "order": 3,
         "about": "Sea green-gray, sand gold.",
         "colors": {
             "Canvas": "#151A18",
@@ -49,31 +74,6 @@ export const themes = {
             "Faded": "#546860",
             "Notice": "#FF6F91",
             "Guide": "#74CBFB"
-        }
-    },
-    "Midnight": {
-        "order": 3,
-        "about": "Near-neutral grays, a calmer violet.",
-        "colors": {
-            "Canvas": "#16151C",
-            "Chrome": "#16151C",
-            "Card": "#211F28",
-            "Button": "#34323E",
-            "Border": "#3B3946",
-            "Ink": "#E6E6EA",
-            "Muted": "#9B95A9",
-            "Heading": "#BEAEF2",
-            "Accent": "#7746D7",
-            "Accent deep": "#512CA7",
-            "Note": "#2B2934",
-            "Note row": "#373441",
-            "Note edge": "#4B4856",
-            "Field": "#18171E",
-            "Field edge": "#3B3946",
-            "Chosen": "#392F4C",
-            "Faded": "#615D68",
-            "Notice": "#FE50BB",
-            "Guide": "#27FF98"
         }
     },
     "Ember": {
