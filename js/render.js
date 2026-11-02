@@ -467,7 +467,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
             const ids = o.group.split("/");
             for (let k = 1; k <= ids.length; k++) { const m = sc.masks.get(ids.slice(0, k).join("/")); if (m && m !== o) { const p = outline(m); if (p) ctx.clip(p); } }
         }
-        try { drawOne(ctx, o, doc, s, get, redraw); } catch (e) { }
+        try { drawOne(ctx, o, doc, s, get, redraw, opts.wet); } catch (e) { }
         ctx.restore();
     }
     // The boards' names, over the art (a picture reaching over a board's top edge never hides one).
@@ -699,6 +699,21 @@ function drawEdit(g, st)
     g.restore();
 }
 let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then laid on the view)
+let dry = null;            // the drawing a stroke is being drawn on, without that stroke: { canvas, key (what it was drawn as) }
+// A drawing made here, or a saved one with what is drawn on it here: its pixels, any drawing merged into it, and its
+// first "upto" strokes (onto "g", set to canvas units).
+function drawingInto(g, o, b, doc, get, upto)
+{
+    if (o.kind === "sketch") { drawStrokes(g, o.strokes.slice(0, upto)); return; }
+    for (const one of [o].concat(o.merged || []))
+    {
+        g.save();
+        g.globalAlpha = one === o ? 1 : Math.max(0, Math.min(1, one.opacity === undefined ? 1 : one.opacity));
+        paintTiles(g, one, one === o ? b : box(one, g), doc, get);
+        g.restore();
+        if (one.strokes) drawStrokes(g, one === o ? one.strokes.slice(0, upto) : one.strokes);
+    }
+}
 
 // A drawing layer's tiles, drawn into its box: its frame (the pixels it was saved with) fills it.
 function paintTiles(ctx, o, b, doc, get)
@@ -933,7 +948,7 @@ function stroke(ctx, o, path, s)
     void s;
 }
 
-function drawOne(ctx, o, doc, s, get, redraw)
+function drawOne(ctx, o, doc, s, get, redraw, wet)
 {
     const b = box(o, ctx);
     turn(ctx, o, b);
@@ -957,43 +972,41 @@ function drawOne(ctx, o, doc, s, get, redraw)
             return;
         }
         case "sketch":
+        case "paint":
         {
-            // Drawn on a canvas of its own the view's size (so its eraser rubs out only its own), then laid on.
+            if (o.kind === "paint" && (!(b.w > 0) || !(b.h > 0))) return;
+            if (o.kind === "paint" && !o.strokes && !o.merged) { paintTiles(ctx, o, b, doc, get); return; }
+            // Strokes not yet saved (a drawing made here, or strokes on a saved one), or a drawing merged into it: drawn
+            // together on a canvas of their own the view's size (so the eraser rubs out its pixels too, and nothing
+            // else), then laid on.
             const m = ctx.getTransform(), cv = ctx.canvas;
             if (!sketchCanvas) sketchCanvas = document.createElement("canvas");
             if (sketchCanvas.width !== cv.width || sketchCanvas.height !== cv.height) { sketchCanvas.width = cv.width; sketchCanvas.height = cv.height; }
             const g = sketchCanvas.getContext("2d");
             g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
-            g.setTransform(m);
-            drawStrokes(g, o.strokes);
-            ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
-            return;
-        }
-        case "paint":
-        {
-            if (!(b.w > 0) || !(b.h > 0)) return;
-            if (o.strokes || o.merged)
+            // A stroke being drawn, the last on it: all the rest kept drawn as they are (made again only when they or
+            // the view change), and only that stroke drawn on them each time, so a stroke is as quick as the first
+            // however many come before it.
+            const strokes = o.strokes || [], wi = wet ? strokes.indexOf(wet) : -1;
+            if (wi >= 0 && wi === strokes.length - 1)
             {
-                // Strokes on it not yet saved, or a drawing merged into it: drawn together on a canvas of their own (so
-                // the eraser rubs out its pixels too, and nothing else), then laid on.
-                const m = ctx.getTransform(), cv = ctx.canvas;
-                if (!sketchCanvas) sketchCanvas = document.createElement("canvas");
-                if (sketchCanvas.width !== cv.width || sketchCanvas.height !== cv.height) { sketchCanvas.width = cv.width; sketchCanvas.height = cv.height; }
-                const g = sketchCanvas.getContext("2d");
-                g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
-                g.setTransform(m);
-                for (const one of [o].concat(o.merged || []))
+                const key = [o.id, cv.width, cv.height, m.a, m.b, m.c, m.d, m.e, m.f, wi, strokes[wi - 1] ? strokes[wi - 1].sid : "", (o.merged || []).length, stats.decoded].join();
+                if (!dry) dry = { canvas: document.createElement("canvas"), key: "" };
+                if (dry.key !== key)
                 {
-                    g.save();
-                    g.globalAlpha = one === o ? 1 : Math.max(0, Math.min(1, one.opacity === undefined ? 1 : one.opacity));
-                    paintTiles(g, one, one === o ? b : box(one, g), doc, get);
-                    g.restore();
-                    if (one.strokes) drawStrokes(g, one.strokes);
+                    if (dry.canvas.width !== cv.width || dry.canvas.height !== cv.height) { dry.canvas.width = cv.width; dry.canvas.height = cv.height; }
+                    const d = dry.canvas.getContext("2d");
+                    d.setTransform(1, 0, 0, 1, 0, 0); d.globalAlpha = 1; d.globalCompositeOperation = "source-over"; d.clearRect(0, 0, cv.width, cv.height);
+                    d.setTransform(m);
+                    drawingInto(d, o, b, doc, get, wi);
+                    dry.key = key;
                 }
-                ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
-                return;
+                g.drawImage(dry.canvas, 0, 0);
+                g.setTransform(m);
+                drawStrokes(g, [wet]);
             }
-            paintTiles(ctx, o, b, doc, get);
+            else { g.setTransform(m); drawingInto(g, o, b, doc, get, strokes.length); }
+            ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
             return;
         }
         case "rect": case "oval":

@@ -1098,14 +1098,14 @@ function drawBar(v, bar, host)
     bar.innerHTML = SLOTS.map(slot).join("") + '<span class="sep"></span>'
         + '<button class="glyph ink" data-act="ink" aria-label="Brush and color" title="Brush and color">' + dot(pen.size, pen.color, pen.opacity) + "</button>"
         + (paintSel ? '<button class="glyph" data-act="clear" aria-label="Delete what&#39;s selected" title="Delete what&#39;s selected">' + icon("trash", 20) + "</button>" : "")
-        + '<button class="glyph" data-act="layers" aria-label="Hierarchy" title="Hierarchy">' + icon("layers", 20) + "</button>"
+        + '<button class="glyph" data-act="newdrawing" aria-label="New drawing" title="New drawing">' + icon("adddrawing", 20) + "</button>"
         + '<button class="done" data-act="done">Done</button>';
     // (the slot in use, tapped again: its tools, as a held one shows them)
     bar.querySelectorAll("[data-slot]").forEach(b => holdable(b, () => { if (TOOL_OF[pen.kind].slot === b.dataset.slot) slotPop(v, b); else useTool(pen.slots[b.dataset.slot], v); }, () => slotPop(v, b)));
     bar.querySelector('[data-act="ink"]').addEventListener("click", e => { const b = e.currentTarget; if (popOf === b) closePop(); else inkPop(v, b); });
     const clear = bar.querySelector('[data-act="clear"]');
     if (clear) clear.addEventListener("click", () => clearSelection(v));
-    bar.querySelector('[data-act="layers"]').addEventListener("click", () => { closePop(); hierarchy(); });
+    bar.querySelector('[data-act="newdrawing"]').addEventListener("click", () => { closePop(); drawOnto(null); if (TOOL_OF[pen.kind].slot !== "brush") useTool(pen.slots.brush, v); toast("Your next stroke starts a new drawing"); });
     bar.querySelector('[data-act="done"]').addEventListener("click", () => endDrawing(v));
 }
 // A button that does one thing when tapped and another when held (the bar's slots: their choices).
@@ -1195,7 +1195,8 @@ function inkPop(v, b)
     let hsv = toHsv(pen.color), editing = false, shown = 0;
     const hue = h => "hsl(" + h + ",100%,50%)";
     // (a slider the whole width; Size and Opacity, each with its mark before it)
-    const marks = { size: '<i class="qsize" aria-hidden="true"></i>', opacity: icon("opacity", 20) };
+    const sizeMark = () => '<i class="qsize" aria-hidden="true" style="width:' + markOf(pen.size) + "px;height:" + markOf(pen.size) + 'px"></i>';
+    const marks = { size: sizeMark(), opacity: icon("opacity", 20) };
     const slider = (id, label, min, max, step, val) => '<div class="qrow' + (label ? " named" : "") + '">' + (label ? '<span class="qmark" title="' + label + '">' + marks[id] + "</span>" : "") + '<input type="range" class="qslide" data-q="' + id + '" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" aria-label="' + ({ h: "Hue", s: "Saturation", v: "Brightness" }[id] || label) + '"></div>';
     const swatches = () => pal().map(c => '<button class="qcolor' + (!editing && c === pen.color.toUpperCase() ? " on" : "") + (editing ? " gone" : "") + '" data-ink="' + c + '" style="background:' + c + '" aria-label="' + (editing ? "Remove " : "") + c + '">' + (editing ? icon("close", 14) : "") + "</button>").join("");
     const html = '<div class="quick">'
@@ -1242,7 +1243,7 @@ function inkPop(v, b)
             field.addEventListener("pointermove", mv); field.addEventListener("pointerup", up); field.addEventListener("pointercancel", up);
         });
         for (const k of ["h", "s", "v"]) q(k).addEventListener("input", () => setHsv(+q("h").value, +q("s").value, +q("v").value));
-        q("size").addEventListener("input", () => { pen.size = sizeOf(+q("size").value); keepPen(); b.innerHTML = dot(pen.size, pen.color, pen.opacity); });
+        q("size").addEventListener("input", () => { pen.size = sizeOf(+q("size").value); keepPen(); b.innerHTML = dot(pen.size, pen.color, pen.opacity); card.querySelector(".qmark .qsize").outerHTML = sizeMark(); });
         q("opacity").addEventListener("input", () => { pen.opacity = +q("opacity").value / 100; keepPen(); b.innerHTML = dot(pen.size, pen.color, pen.opacity); });
         inks.addEventListener("click", e =>
         {
@@ -1258,6 +1259,8 @@ function inkPop(v, b)
         show();
     });
 }
+// The size slider's mark: a dot as big as the brush, within its place (4 to 22 across).
+function markOf(size) { return Math.round(4 + 18 * sizeAt(size)); }
 // The size slider: even steps for the small sizes, bigger ones as it goes (0 to 1, to a size on the screen).
 function sizeOf(k) { return Math.round(SIZE.least * Math.pow(SIZE.most / SIZE.least, k) * 10) / 10; }
 function sizeAt(size) { return Math.log(size / SIZE.least) / Math.log(SIZE.most / SIZE.least); }
@@ -1355,7 +1358,7 @@ function strokeFrom(v, at, e)
     add(at, e);
     project.preview = s;
     refreshView();
-    const wet = v.wet = { id: s.base || s.id, pts, ahead: [] };
+    const wet = v.wet = { id: s.base || s.id, pts, ahead: [], stroke: s.stroke };
     let mine = null;   // (its undoing, once made)   // (a saved drawing: its strokes are drawn on it, in its place)
     v.redraw();
     return {
@@ -1936,8 +1939,8 @@ function drawingBelow(o)
 function addMenu(btn)
 {
     if (!btn) return;
-    const was = app.querySelector(".addmenu");
-    if (was) { was.remove(); return; }
+    const was = document.querySelector(".addmenu");   // (it is put on the page itself, over everything: tapped again, put away)
+    if (was) { was.gone(); return; }
     const m = element('<div class="addmenu" role="menu">'
         + '<button data-act="photo">' + icon("photo", 20) + "<span>Photo</span></button>"
         + '<button data-act="paste">' + icon("copy", 20) + "<span>Paste image</span></button>"
@@ -1947,7 +1950,7 @@ function addMenu(btn)
     m.style.right = Math.max(8, innerWidth - r.right) + "px";
     document.body.appendChild(m);
     if (!calm) m.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }], { duration: 150, easing: "cubic-bezier(.2,.9,.3,1)" });
-    const gone = () => { m.remove(); document.removeEventListener("pointerdown", away, true); };
+    const gone = m.gone = () => { m.remove(); document.removeEventListener("pointerdown", away, true); };
     const away = e => { if (!m.contains(e.target) && !btn.contains(e.target)) gone(); };
     setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
     // (each done at once, in the tap: a phone only shows its photos, or lets a page read what is copied, then)
@@ -2298,7 +2301,13 @@ function changed()
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, pen ? 20000 : 900);   // (drawing: saved once it pauses a while, or Done; each time Draw is begun, one drawing)
 }
-function keepSteps() { if (project && !project.local) remember("canopy.steps." + project.path, project.steps.length ? project.steps : null); }
+// The steps not yet saved, kept on this phone (in case the page is closed first): written once things pause, not after
+// every stroke (a long run of strokes is a lot to write), and at once when the page is put away.
+let keepTimer = null;
+function keepSteps() { clearTimeout(keepTimer); keepTimer = setTimeout(keepNow, 1500); }
+function keepNow() { clearTimeout(keepTimer); keepTimer = null; if (project && !project.local) remember("canopy.steps." + project.path, project.steps.length ? project.steps : null); }
+addEventListener("pagehide", keepNow);
+document.addEventListener("visibilitychange", () => { if (document.hidden) keepNow(); });
 
 async function save()
 {
@@ -2479,6 +2488,7 @@ async function newProject()
 async function openPath(path)
 {
     problem = "";
+    keepNow();   // (the last project's steps not yet kept: kept before another is opened)
     app.innerHTML = bar(fileName(path), "", "") + '<main class="page"><div class="empty">Opening…</div></main>';
     try
     {
