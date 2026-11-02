@@ -352,6 +352,7 @@ svg { display: block; }
 .drawbar .done { padding: 0 10px; }
 /* a popover from one of its buttons: the card and its tab one shape (as Board's Drawing Bar draws them) */
 .pop { position: absolute; z-index: 6; }
+.pop .card > .qswatches { padding: 6px; column-gap: 10px; }   /* (a shape's colors: the palette alone) */
 .pop .shape { position: absolute; inset: 0; overflow: visible; filter: drop-shadow(0 8px 16px rgba(0,0,0,.45)); pointer-events: none; }
 .pop .shape path { fill: var(--card); stroke: var(--border); stroke-width: 1; }
 .pop .card { position: absolute; left: 0; top: 0; width: max-content; max-width: min(300px, calc(100vw - 32px)); padding: 6px; }

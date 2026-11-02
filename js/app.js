@@ -1270,10 +1270,11 @@ function popFrom(btn, html, wire)
         const room = fb.width - 8;
         let L = sx + sw / 2 - W / 2;
         L = Math.max(8, Math.min(L, room - W));
-        const top = barTop - gap - body;   // (clear of the bar, comfortably, as Board's are: only its tab reaches down)
+        const top = Math.round(barTop - gap - body);   // (on whole pixels, as its left: a phone draws a layer put between them soft)   // (clear of the bar, comfortably, as Board's are: only its tab reaches down)
         const x = sx - L;
         const flushL = x < r + f + 2, flushR = x + sw > W - r - f - 2;
         if (flushL) L = sx; else if (flushR) L = sx + sw - W;
+        L = Math.round(L);
         const X = sx - L, H = stBot - top;
         let d = "M" + r + ",0.5 L" + (W - r) + ",0.5 A" + r + "," + r + " 0 0 1 " + (W - 0.5) + "," + r;
         if (flushR) d += " L" + (W - 0.5) + "," + (H - foot) + " A" + foot + "," + foot + " 0 0 1 " + (W - foot) + "," + (H - 0.5);
