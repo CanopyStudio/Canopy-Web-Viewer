@@ -336,6 +336,12 @@ export function tilesOf(doc, folder)   // a drawing's tiles: their places (colum
 
 // ---- what is drawn: the file's objects, the lists as they are here, and the photos added ----
 
+// The canvas's color: as Board shows it, the theme's (one color for every project, not the file's own "canvas" line,
+// which Board keeps but doesn't show); the file's until the theme is known.
+let canvasBack = null;
+export function setCanvasBack(c) { canvasBack = c; }
+export function back(doc) { return canvasBack || doc.canvas; }
+
 export function scene(doc, view)
 {
     const lists = new Map(view.lists.map(l => [l.id, l]));
@@ -347,6 +353,7 @@ export function scene(doc, view)
         if (view.locks.has(o.id)) q = { ...q, locked: view.locks.get(o.id) };
         if (view.hides && view.hides.has(o.id)) q = { ...q, hidden: view.hides.get(o.id) };
         if (view.names && view.names.has(o.id)) q = { ...q, name: view.names.get(o.id) };
+        if (view.fills && view.fills.has(o.id)) q = { ...q, fill: view.fills.get(o.id) };
         const lay = movedTo(view, o.id);
         if (lay) q = { ...q, ...regrouped(doc, o, lay) };
         return q;
@@ -450,19 +457,19 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
     const part = opts.part, under = !part || part.under;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over";
-    if (under) { ctx.fillStyle = opts.background || doc.canvas; ctx.fillRect(0, 0, w, h); }
+    if (under) { ctx.fillStyle = opts.background || back(doc); ctx.fillRect(0, 0, w, h); }
     const s = cam.s;
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * cam.tx, dpr * cam.ty);
     const view = { x: -cam.tx / s, y: -cam.ty / s, w: w / s, h: h / s };
     const meets = b => b.x <= view.x + view.w && b.x + b.w >= view.x && b.y <= view.y + view.h && b.y + b.h >= view.y;
     // Boards, under everything.
-    const fill = doc.boardLook === 2 ? "#ffffff" : doc.boardColor ? rgba(doc.boardColor) : shade(doc.canvas, 0.07);
+    const fill = doc.boardLook === 2 ? "#ffffff" : doc.boardColor ? rgba(doc.boardColor) : shade(back(doc), 0.07);
     for (const b of under ? sc.boards : [])
     {
         if (!meets(b)) continue;
         ctx.beginPath();
         ctx.roundRect(b.x, b.y, b.w, b.h, doc.boardLook !== 0 ? 0 : Math.min(8 / s, b.w / 2, b.h / 2));
-        if (doc.boardLook === 1) { ctx.strokeStyle = shade(doc.canvas, 0.3); ctx.lineWidth = 1 / s; ctx.stroke(); }
+        if (doc.boardLook === 1) { ctx.strokeStyle = shade(back(doc), 0.3); ctx.lineWidth = 1 / s; ctx.stroke(); }
         else { ctx.fillStyle = fill; ctx.fill(); }
     }
     for (const o of part ? sc.items.slice(part.from, part.to) : sc.items)
@@ -485,7 +492,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
     if (opts.names !== false && (!part || part.names))
     {
         ctx.font = "500 " + 12 / s + "px 'IBM Plex Sans', system-ui, sans-serif";
-        ctx.fillStyle = dark(doc.canvas) ? "rgba(234,236,235,.55)" : "rgba(21,22,22,.55)";
+        ctx.fillStyle = dark(back(doc)) ? "rgba(234,236,235,.55)" : "rgba(21,22,22,.55)";
         ctx.textBaseline = "bottom";
         for (const b of sc.boards) if (meets({ x: b.x, y: b.y - 24 / s, w: b.w, h: 24 / s })) ctx.fillText(b.name, b.x, b.y - 6 / s);
     }

@@ -52,5 +52,7 @@ export const boardIcons = {
     "saved": "<circle cx=\"12\" cy=\"12\" r=\"8.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\"/><path d=\"M8.2 12.3L10.8 14.9L15.8 9.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.667\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
     "saving": "<circle cx=\"12\" cy=\"12\" r=\"8.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" opacity=\"0.25\"/><path d=\"M12 3.5A8.5 8.5 0 0 1 20.5 12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.667\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
     "tosave": "<circle cx=\"12\" cy=\"12\" r=\"8.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\"/><path d=\"M12 16V8.4M8.6 11.6L12 8.2L15.4 11.6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.667\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+    "rect": "<rect x=\"4\" y=\"5\" width=\"16\" height=\"14\" rx=\"1.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/>",
+    "oval": "<circle cx=\"12\" cy=\"12\" r=\"8\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/>",
     "waiting": "<circle cx=\"12\" cy=\"12\" r=\"8.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\"/><line x1=\"12\" y1=\"7.5\" x2=\"12\" y2=\"13\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.667\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"12\" cy=\"16.4\" r=\"1.4\" fill=\"currentColor\" stroke=\"none\"/>"
 };

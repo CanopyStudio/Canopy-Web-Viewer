@@ -262,6 +262,7 @@ export function write(doc, view, drawn)
             f[at] = escape(view.names.get(o.id));
             lines[o.line] = key + " " + f.join("|");
         }
+        if (view.fills && view.fills.has(o.id) && lines[o.line].startsWith("shape ")) lines[o.line] = filledLine(lines[o.line], o, view.fills.get(o.id));
         const again = repainted.get(o.id);
         if (again)
         {
@@ -441,6 +442,7 @@ export function apply(doc, steps)
     const relocked = new Set(), goneBoards = new Set(), restored = [];
     // The hierarchy's: objects shown or hidden, renamed, put above another (and into its layer), layers shown or hidden,
     // and drawings merged down (each into the one below, painted together as it is saved).
+    const fills = new Map();
     const hides = new Map(), names = new Map(), zorder = [], layerHides = new Map(), merges = [], newLayers = [], droppedLayers = new Set();
     const unsaved = new Map();   // drawings shown as they were before a save, by id: their pixels then ("snap"), a save's strokes undone past it
     const sketches = [];   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
@@ -489,6 +491,18 @@ export function apply(doc, steps)
         if (s.t === "order") { order = s.ids.slice(); continue; }
         if (s.t === "hide") { for (const id of s.ids) hides.set(id, s.on); continue; }
         if (s.t === "rename") { names.set(s.id, s.name); continue; }
+        if (s.t === "fill")
+        {
+            // Shapes colored here: one made here its lines again (a copy: the step's own left as it was), the file's
+            // kept by its id.
+            for (const id in s.fills)
+            {
+                const r = restored.find(o => o.id === id);
+                if (r && shaped(r.item)) { r.lines = r.lines.slice(); r.lines[r.body] = filledLine(r.lines[r.body], r.item, s.fills[id]); r.item = { ...r.item, fill: s.fills[id] }; }
+                else if (shaped(items.get(id))) fills.set(id, s.fills[id]);
+            }
+            continue;
+        }
         if (s.t === "zorder") { if (items.has(s.id)) zorder.push({ id: s.id, after: s.after, layer: s.layer || null }); continue; }
         if (s.t === "hidelayer") { layerHides.set(s.id, s.on); continue; }
         if (s.t === "newlayer") { if (!doc.folders.has(s.id) && !newLayers.some(l => l.id === s.id)) newLayers.push({ id: s.id, name: s.name, below: s.below || null }); continue; }
@@ -547,7 +561,7 @@ export function apply(doc, steps)
     }
     // (a drawing made in a save, undone past it with none of its strokes back: not there)
     for (const [id, snap] of unsaved) if (snap.isNew && !sketches.some(k => k.base === id && k.strokes.length)) removed.add(id);
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, zorder, layerHides, merges, newLayers, droppedLayers, unsaved };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, fills, zorder, layerHides, merges, newLayers, droppedLayers, unsaved };
 }
 
 // ---- the hierarchy's changes ----
@@ -600,10 +614,27 @@ function keep(doc, view, id)
     const o = doc.items.find(x => x.id === id);
     if (!o) return null;
     const from = o.metaLine >= 0 ? o.metaLine : o.line, lines = doc.lines.slice(from, o.lastLine + 1);
+    if (view.fills && view.fills.has(id) && shaped(o)) lines[o.line - from] = filledLine(lines[o.line - from], o, view.fills.get(id));
     const t = view.moved.get(id);
     if (t) lines[o.line - from] = placedLine(lines[o.line - from], o, t);
     return { id, lines };
 }
+// A rectangle or oval made here, filled: its lines as Board writes them (brought in by a "restore" step, as a paste is).
+export function shapeThing(kind, b, fill, layer, author, id)
+{
+    id = id || newId();
+    return { id, lines: [metaLine(id, layer, author, false), "shape " + (kind === "rect" ? "R" : "O") + "|" + [n(b.x), n(b.y), n(b.w), n(b.h), 1].join("|") + "|-|0|0||" + fill + "|-|0"] };
+}
+// A shape's line with another fill (its outline as it was; one saved before shapes had both, put as Board now has it).
+function filledLine(line, o, fill)
+{
+    const f = line.substring(6).split("|");
+    if (f.length <= 12) { while (f.length < 10) f.push(""); f[6] = "-"; f[7] = "0"; f[11] = o.stroke || "-"; f[12] = n(o.width || 0); }
+    f[10] = fill || "-";
+    return "shape " + f.join("|");
+}
+const shaped = o => o && (o.kind === "rect" || o.kind === "oval");
+
 // ---- copied and pasted: objects as "keep" has them (to be brought back by a "restore" step, so undone alike) ----
 
 export function copyOut(doc, view, ids) { return ids.map(id => keep(doc, view, id)).filter(Boolean); }
@@ -687,6 +718,16 @@ export function inverse(doc, view, s)
             if (on.length) out.push({ t: "hide", list: null, ids: on, on: true });
             if (off.length) out.push({ t: "hide", list: null, ids: off, on: false });
             return out;
+        }
+        case "fill":
+        {
+            const was = {};
+            for (const id in s.fills)
+            {
+                const r = view.restored.find(o => o.id === id), o = doc.items.find(x => x.id === id);
+                was[id] = r ? r.item.fill : view.fills.has(id) ? view.fills.get(id) : o ? o.fill : null;
+            }
+            return [{ t: "fill", list: null, fills: was }];
         }
         case "rename": { const o = doc.items.find(x => x.id === s.id); return o ? [{ t: "rename", list: null, id: s.id, name: view.names.has(s.id) ? view.names.get(s.id) : o.name }] : []; }
         case "zorder":

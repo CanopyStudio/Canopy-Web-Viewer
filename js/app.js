@@ -96,6 +96,7 @@ function applyTheme(name)
     if (!themes[name]) name = firstTheme;
     theme = name;
     shown = toned(themes[name].colors, tone);
+    render.setCanvasBack(shown.Canvas);
     const c = shown, root = document.documentElement.style, z = sizes;
     const v = { canvas: c.Canvas, chrome: c.Chrome, card: c.Card, button: c.Button, border: c.Border, ink: c.Ink, muted: c.Muted, heading: c.Heading,
         accent: c.Accent, "accent-deep": c["Accent deep"], note: c.Note, "note-row": c["Note row"], "note-edge": c["Note edge"], field: c.Field,
@@ -473,7 +474,7 @@ function addPicture()
         if (!boards.length) { tab = "canvas"; remember("canopy.tab", tab); show(); addPhoto(file); return; }
         sheetUp(() => '<div class="ptitle">Put it on…</div><div class="scroll"><button class="pick" data-do="on" data-value=""><span>The canvas</span>' + icon("canvas", 18) + "</button>"
             + '<div class="section">Boards</div>' + boards.map(b => '<button class="pick" data-do="on" data-value="' + text(b.id) + '"><span>' + text(b.name) + "</span></button>").join("") + "</div>",
-            (d, id, shut) => { if (d !== "on") return; shut(() => { if (id) openBoard(id, null); else { tab = "canvas"; remember("canopy.tab", tab); show(); } addPhoto(file); }); });
+            (d, id, shut) => { if (d !== "on") return; shut(() => { if (id) focusBoard(id, false); else { tab = "canvas"; remember("canopy.tab", tab); show(); } addPhoto(file); }); });
     });
 }
 
@@ -756,7 +757,7 @@ function drawThumbs()
     document.querySelectorAll(".bcard").forEach(el =>
     {
         const b = project.scene.boards.find(o => o.id === el.dataset.value);
-        if (b) thumbnail(el.querySelector("canvas"), project.scene, b, project.get, doc.canvas);
+        if (b) thumbnail(el.querySelector("canvas"), project.scene, b, project.get, render.back(doc));
     });
 }
 
@@ -836,6 +837,15 @@ async function describe(o)
     else out.push("Shown from " + (e.from || "?") + ": " + e.img.width + " \u00d7 " + e.img.height + (e.src ? " of " + e.src.w + " \u00d7 " + e.src.h : "") + (e.blank ? " \u2014 BLANK" : ""));
     return out.join("\n");
 }
+// A board: shown on the canvas, fitted (no screen of its own).
+function focusBoard(id, glide)
+{
+    const b = project && project.scene.boards.find(o => o.id === id);
+    if (!b) return;
+    finishTyping(false, false);
+    if (open || tab !== "canvas") { open = null; tab = "canvas"; remember("canopy.tab", tab); show(); }
+    if (canvasView) canvasView.fit(b, 0.04, glide);
+}
 function fitAll(glide) { if (canvasView) canvasView.fit(render.extent(project.scene), 0.06, glide); }
 // ---- objects picked on the canvas (or in a board): moved by dragging, sized by a corner, deleted ----
 
@@ -846,13 +856,15 @@ function editable(v)
 {
     v.onTap = (x, y) =>
     {
-        // (drawing: a tap is a dot, not a pick; with Select, a pick; with Fill or the Eyedropper, theirs)
+        // (drawing: a tap is a dot, not a pick; with Select, a pick; with Fill or the Eyedropper, theirs; a shape to
+        // be drawn: not drawn after all)
+        if (shaping) { shaping = null; tools(v); corner(); return; }
         if (!pen || pen.kind === "select") tapObject(v, x, y);
         else if (pen.kind === "fill") fillAt(v, v.toScreen(x, y));
         else if (pen.kind === "dropper") dropperAt(v, v.toScreen(x, y));
     };
     v.overlay = ctx => { drawPicked(v, ctx); drawSelection(v, ctx); };
-    v.grab = (at, e) => pen ? drawPress(v, at, e) : grabPicked(v, at);
+    v.grab = (at, e) => shaping && v === canvasView ? shapeFrom(v, at) : pen ? drawPress(v, at, e) : grabPicked(v, at);
     v.paintOn = () => pen && !project.base.doc.readOnly ? project.drawOn || null : null;   // (the drawing drawn on: shown from the graphics chip)
     v.overlayNeeded = () => !!(picked || paintSel || selecting);
     tools(v);   // (something copied: ready to paste)
@@ -967,6 +979,53 @@ function settle(v)
     if (s && (s.by.k !== 1 || Math.abs(s.by.ox) > 0.01 || Math.abs(s.by.oy) > 0.01)) { step(s); feel.drop(); } else refreshView();
     v.redraw();
 }
+// ---- shapes: a rectangle or circle dragged out on the canvas, filled, as Board's are (its own shape items) ----
+
+let shaping = null;   // "rect" or "oval": the next drag on the canvas draws one
+function shapeFrom(v, at)
+{
+    const kind = shaping, c0 = v.toCanvas(at.x, at.y), layer = cnpy.topLayer(project.base.doc), who = dbx.who(), fill = sessionInk().color;
+    let made = null;
+    return {
+        move(now)
+        {
+            const c = v.toCanvas(now.x, now.y), b = { x: Math.min(c0.x, c.x), y: Math.min(c0.y, c.y), w: Math.abs(c.x - c0.x), h: Math.abs(c.y - c0.y) };
+            const th = cnpy.shapeThing(kind, b, fill, layer, who, made && made.id);
+            made = { id: th.id, w: b.w, h: b.h };
+            project.preview = { t: "restore", list: null, things: [th] };
+            refreshView(); v.redraw();
+        },
+        end()
+        {
+            const s = project.preview;
+            project.preview = null;
+            // (too small to see, a slip: none made)
+            if (!s || Math.min(made.w, made.h) * v.cam.s < 6) { refreshView(); v.redraw(); return; }
+            shaping = null; corner();
+            step(s); feel.drop();
+            pick({ ids: [made.id], list: null }, v);
+        },
+        cancel() { project.preview = null; refreshView(); v.redraw(); }
+    };
+}
+// Its color: one of the palette's (the color of every shape picked).
+function shapeColors(v, btn)
+{
+    const ids = picked.ids, pal = remembered("canopy.palette", null) || PALETTE;
+    const now = (project.scene.items.find(o => o.id === ids[0]) || {}).fill || "";
+    popFrom(btn, '<div class="qswatches">' + pal.map(c => '<button class="qcolor' + (c.toUpperCase() === now.toUpperCase() ? " on" : "") + '" data-ink="' + c + '" style="background:' + c + '" aria-label="' + c + '"></button>').join("") + "</div>",
+        card => card.querySelectorAll("[data-ink]").forEach(x => x.addEventListener("click", () =>
+        {
+            const fills = {};
+            for (const id of ids) fills[id] = x.dataset.ink;
+            step({ t: "fill", list: null, fills });
+            session = { ...sessionInk(), color: x.dataset.ink };
+            card.querySelectorAll("[data-ink]").forEach(y => y.classList.toggle("on", y === x));
+            btn.querySelector("i").style.background = x.dataset.ink;
+            v.redraw();
+        })));
+}
+
 // The bar of what can be done to what is picked, along the bottom of the canvas.
 function tools(v)
 {
@@ -974,9 +1033,17 @@ function tools(v)
     let bar = host.querySelector(".tools");
     if (pen) { drawBar(v, bar, host); return; }
     if (bar && bar.classList.contains("drawbar")) { bar.remove(); bar = null; }
+    if (picked && !project.scene.items.some(o => picked.ids.includes(o.id))) picked = null;   // (gone: undone, say)
     const pasting = !picked && clip && !project.base.doc.readOnly;
-    if (!picked && !pasting) { if (bar) bar.remove(); return; }
+    if (!picked && !pasting && !(shaping && v === canvasView)) { if (bar) bar.remove(); return; }
     if (!bar) { bar = element('<div class="tools"></div>'); host.appendChild(bar); if (!calm) bar.animate([{ transform: "translateY(16px)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 220, easing: "cubic-bezier(.2,1.2,.3,1)" }); }
+    if (shaping && !picked)
+    {
+        // A shape to be drawn: said so, until it is (or let go of).
+        bar.innerHTML = '<span class="what">Drag to draw a ' + (shaping === "rect" ? "rectangle" : "circle") + '</span><button data-act="unshape">Cancel</button>';
+        bar.querySelector('[data-act="unshape"]').addEventListener("click", () => { shaping = null; tools(v); corner(); });
+        return;
+    }
     if (pasting)
     {
         // Nothing picked, something copied: pasted here, or let go of.
@@ -987,7 +1054,10 @@ function tools(v)
     }
     const n = picked.ids.length, shut = pickedLocked();
     const href = (project.scene.items.find(o => picked.ids.includes(o.id) && o.href) || {}).href;   // a link it has (Board's Links)
+    const its = project.scene.items.filter(o => picked.ids.includes(o.id));
+    const colorable = !shut && its.length === picked.ids.length && its.every(o => o.kind === "rect" || o.kind === "oval");
     bar.innerHTML = '<span class="what">' + (shut ? icon("lock", 15) : "") + (picked.list ? "List" : n > 1 ? "Group of " + n : kindName(picked.ids[0])) + "</span>"
+        + (colorable ? '<button data-act="color" class="shapeink" aria-label="Color"><i style="background:' + (its[0].fill || "transparent") + '"></i></button>' : "")
         + (href ? '<button data-act="link" class="linkto">' + icon("link", 15) + "<span>" + text(linkWords(href)) + "</span></button>" : "")
         + (picked.list ? '<button data-act="open">Open</button>' : "")
         + '<button data-act="lock">' + (shut ? "Unlock" : "Lock") + "</button>"
@@ -995,6 +1065,7 @@ function tools(v)
         + (shut ? "" : '<button data-act="delete" class="danger">Delete</button>') + '<button data-act="done">Done</button>';
     bar.querySelectorAll("button").forEach(b => b.addEventListener("click", () =>
     {
+        if (b.dataset.act === "color") { if (popOf === b) closePop(); else shapeColors(v, b); return; }
         if (b.dataset.act === "open") openList(picked.list, null);
         else if (b.dataset.act === "link") openLink(href, v);
         else if (b.dataset.act === "copy") copyPicked(v);
@@ -1092,17 +1163,26 @@ function drawMode()
     const slots = { pick: "select", brush: "pen", rub: "erase" };
     for (const k in was.slots || {}) if (TOOL_OF[was.slots[k]] && TOOL_OF[was.slots[k]].slot === k) slots[k] = was.slots[k];   // (one no longer on the bar, the Marker: the first)
     const kind = TOOL_OF[was.kind] && was.kind !== "dropper" ? was.kind : "pen";
-    // (each time drawing begins: fully opaque, and a color of the palette's picked at random, grays left out)
     const size = was.size >= SIZE.least && was.size <= SIZE.most ? was.size : SIZE.start;
-    const pal = remembered("canopy.palette", null) || PALETTE, bright = pal.filter(c => toHsv(c)[1] >= 25 && toHsv(c)[2] >= 25);
-    const from = bright.length ? bright : pal;
-    pen = { kind, slots, size, opacity: 1, color: from[Math.floor(Math.random() * from.length)] || PALETTE[0] };
+    const ink = sessionInk();
+    pen = { kind, slots, size, opacity: ink.opacity, color: ink.color };
     pick(null, v);
     corner();
     setState(state);   // (the save button shown as drawing has it)
 }
+// The color drawing (and a shape) starts with: each time the app is opened, fully opaque and a color of the palette's
+// picked at random (grays left out); after that, the one last drawn with.
+let session = null;
+function sessionInk()
+{
+    if (session) return session;
+    const pal = remembered("canopy.palette", null) || PALETTE, bright = pal.filter(c => toHsv(c)[1] >= 25 && toHsv(c)[2] >= 25);
+    const from = bright.length ? bright : pal;
+    return session = { color: from[Math.floor(Math.random() * from.length)] || PALETTE[0], opacity: 1 };
+}
 function endDrawing(v)
 {
+    if (pen) session = { color: pen.color, opacity: pen.opacity };
     pen = null; paintSel = null; closePop();
     if (v) tools(v);
     corner();
@@ -1170,7 +1250,7 @@ function popAway(e)
 function popFrom(btn, html, wire)
 {
     closePop();
-    const bar = btn.closest(".drawbar"), frame = bar.parentNode, fb = frame.getBoundingClientRect(), bb = btn.getBoundingClientRect();
+    const bar = btn.closest(".tools"), frame = bar.parentNode, fb = frame.getBoundingClientRect(), bb = btn.getBoundingClientRect();
     const el = element('<div class="pop"><svg class="shape"><path/></svg><div class="card">' + html + "</div></div>");
     frame.appendChild(el);
     const card = el.querySelector(".card");
@@ -1786,11 +1866,13 @@ function corner()
     const c = app.querySelector("#tab .corner");
     if (!c || !project) return;
     const shut = project.base.doc.readOnly;
-    c.innerHTML = (shut ? "" : iconButton("draw", "brush", pen ? "Done drawing" : "Draw")) + iconButton("hierarchy", "layers", "Hierarchy")
+    c.innerHTML = (shut ? "" : iconButton("draw", "brush", pen ? "Done drawing" : "Draw") + iconButton("shapes", "rect", "Shapes")) + iconButton("hierarchy", "layers", "Hierarchy")
         + (full ? (shut ? "" : iconButton("undo", "undo", "Undo", "", !undos.length)) : iconButton("fitall", "fit", "Fit everything"))
         + iconButton("fullscreen", "full", full ? "Exit full screen" : "Full screen");
     const d = c.querySelector('[data-do="draw"]');
     if (d) d.classList.toggle("on", !!pen);
+    const sh = c.querySelector('[data-do="shapes"]');
+    if (sh) sh.classList.toggle("on", !!shaping);
     const f = c.querySelector('[data-do="fullscreen"]');
     if (f) f.classList.toggle("on", full);
     wire(c);
@@ -2035,13 +2117,43 @@ function drawingBelow(o)
 // The canvas's +: a photo, a picture copied, or a new list, in the middle of what the canvas shows.
 function addMenu(btn)
 {
-    if (!btn) return;
-    const was = document.querySelector(".addmenu");   // (it is put on the page itself, over everything: tapped again, put away)
-    if (was) { was.gone(); return; }
-    const m = element('<div class="addmenu" role="menu">'
-        + '<button data-act="photo">' + icon("photo", 20) + "<span>Photo</span></button>"
+    const m = dropMenu(btn, '<button data-act="photo">' + icon("photo", 20) + "<span>Photo</span></button>"
         + '<button data-act="paste">' + icon("copy", 20) + "<span>Paste image</span></button>"
-        + '<button data-act="list">' + icon("lists", 20) + "<span>New list</span></button></div>");
+        + '<button data-act="list">' + icon("lists", 20) + "<span>New list</span></button>" + shapeItems());
+    if (!m) return;
+    wireShapes(m);
+    const gone = m.gone;
+    // (each done at once, in the tap: a phone only shows its photos, or lets a page read what is copied, then)
+    m.querySelector('[data-act="photo"]').addEventListener("click", () => { gone(); app.querySelector("#photo-picker").click(); });
+    m.querySelector('[data-act="paste"]').addEventListener("click", () => { const got = readClipboard(); gone(); got.then(placeCopied); });
+    m.querySelector('[data-act="list"]').addEventListener("click", () => { gone(); newList(canvasView ? canvasView.middle() : null); });
+}
+// The shapes, from the canvas's corner: the one chosen drawn by the next drag (chosen again, or tapped again: not).
+function shapeMenu(btn)
+{
+    if (shaping && canvasView) { shaping = null; tools(canvasView); corner(); return; }
+    const m = dropMenu(btn, shapeItems());
+    if (m) wireShapes(m);
+}
+const shapeItems = () => '<button data-act="rect">' + icon("rect", 20) + "<span>Rectangle</span></button>" + '<button data-act="oval">' + icon("oval", 20) + "<span>Circle</span></button>";
+function wireShapes(m)
+{
+    for (const k of ["rect", "oval"]) m.querySelector('[data-act="' + k + '"]').addEventListener("click", () =>
+    {
+        m.gone();
+        if (!canvasView) return;
+        if (pen) endDrawing(canvasView);
+        shaping = k; pick(null, canvasView); corner();
+    });
+}
+// A menu below a button (put on the page itself, over everything: its button tapped again, put away), or null then.
+function dropMenu(btn, html)
+{
+    if (!btn) return null;
+    const was = document.querySelector(".addmenu");
+    if (was) { const same = was.from === btn; was.gone(); if (same) return null; }
+    const m = element('<div class="addmenu" role="menu">' + html + "</div>");
+    m.from = btn;
     const r = btn.getBoundingClientRect();
     m.style.top = r.bottom + 6 + "px";
     m.style.right = Math.max(8, innerWidth - r.right) + "px";
@@ -2050,10 +2162,7 @@ function addMenu(btn)
     const gone = m.gone = () => { m.remove(); document.removeEventListener("pointerdown", away, true); };
     const away = e => { if (!m.contains(e.target) && !btn.contains(e.target)) gone(); };
     setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
-    // (each done at once, in the tap: a phone only shows its photos, or lets a page read what is copied, then)
-    m.querySelector('[data-act="photo"]').addEventListener("click", () => { gone(); app.querySelector("#photo-picker").click(); });
-    m.querySelector('[data-act="paste"]').addEventListener("click", () => { const got = readClipboard(); gone(); got.then(placeCopied); });
-    m.querySelector('[data-act="list"]').addEventListener("click", () => { gone(); newList(canvasView ? canvasView.middle() : null); });
+    return m;
 }
 function photoMenu()
 {
@@ -2148,6 +2257,7 @@ function closeViewers()
     if (picked && picked.viewer !== boardView) picked = null;
     if (pen && !(boardView && open && open.kind === "board"))
     {
+        session = { color: pen.color, opacity: pen.opacity };
         pen = null; paintSel = null; closePop();
         if (project && project.steps.length && !project.local) { clearTimeout(saveTimer); save(); }
     }
@@ -2660,7 +2770,7 @@ function newBoard()
     while (all.some(b => b.name === "Board " + k)) k++;
     const board = { id: cnpy.newId(), x: Math.round(e.x + e.w + 120), y: Math.round(e.y), w: 1920, h: 1080, name: "Board " + k };
     step({ t: "newboard", list: null, board });
-    openBoard(board.id, null);
+    focusBoard(board.id, true);
 }
 
 // A new project, empty, in the Dropbox folder on show, opened.
@@ -3146,7 +3256,7 @@ function drawLinkThumbs()
             area = { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 };
             shown = { ...sc, items: t.items, boards: [] };
         }
-        thumbnail(c, shown, area, project.get, project.base.doc.canvas);
+        thumbnail(c, shown, area, project.get, render.back(project.base.doc));
     });
 }
 
@@ -3183,7 +3293,7 @@ function follow(id)
     finishTyping(false, false);
     const sc = project.scene, to = render.linked(sc, id);
     if (!to) { problem = "What it linked to is no longer in the project."; return show(); }
-    if (to.board) { openBoard(to.board.id, null); return; }
+    if (to.board) { focusBoard(to.board.id, true); return; }
     if (to.item && to.item.kind === "list") { openList(to.item.id, null); return; }
     open = null; tab = "canvas"; remember("canopy.tab", tab);
     show();
@@ -3272,7 +3382,7 @@ function act(what, value, ev, el)
         case "files": goBack(); break;
         case "tab": if (value === tab && !open) { if (tab === "canvas") fitAll(true); break; } finishTyping(false, false); open = null; tab = value; remember("canopy.tab", tab); show(); break;
         case "list": go({ project: project.path, local: project.local, open: { kind: "list", id: value } }, el); break;
-        case "board": go({ project: project.path, local: project.local, open: { kind: "board", id: value } }, el); break;
+        case "board": focusBoard(value, true); break;
         case "close": goBack(); break;
         case "fitall": fitAll(true); break;
         case "fitboard": { const b = project.scene.boards.find(o => o.id === open.id); if (b && boardView) boardView.fit(b, 0.04, true); break; }
@@ -3290,7 +3400,8 @@ function act(what, value, ev, el)
         }
         case "keep": keepOnPhone(value); break;
         case "photo": photoMenu(); break;
-        case "draw": drawMode(); break;
+        case "draw": if (shaping) shaping = null; drawMode(); break;
+        case "shapes": shapeMenu(el); break;
         case "addmenu": addMenu(el); break;
         case "hierarchy": hierarchy(); break;
         case "fullscreen": setFull(!full); break;
