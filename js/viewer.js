@@ -20,12 +20,22 @@ export class Viewer
         this.movingUntil = 0;
         this.resize = () => this.fitCanvas();
         new ResizeObserver(this.resize).observe(host);
+        // Turning the phone: its size again once the turn has settled (the observer can hear only a size from part way
+        // through, leaving the canvas the old shape, and strokes off from the finger).
+        this.turned = () =>
+        {
+            if (!this.canvas.isConnected) { window.removeEventListener("orientationchange", this.turned); if (window.visualViewport) window.visualViewport.removeEventListener("resize", this.turned); return; }   // (a view put away)
+            setTimeout(this.resize, 350);
+        };
+        window.addEventListener("orientationchange", this.turned);
+        if (window.visualViewport) window.visualViewport.addEventListener("resize", this.turned);
         this.fitCanvas();
         const c = this.canvas;
         c.addEventListener("pointerdown", e => this.down(e));
         c.addEventListener("pointermove", e => this.move(e));
         c.addEventListener("pointerup", e => this.up(e));
         c.addEventListener("pointercancel", e => this.up(e));
+        c.addEventListener("lostpointercapture", e => this.up(e));   // (taken away however it happens: let go)
         c.addEventListener("wheel", e => this.wheel(e), { passive: false });
     }
 
@@ -101,7 +111,16 @@ export class Viewer
     at(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     down(e)
     {
-        this.canvas.setPointerCapture(e.pointerId);
+        // (laid out at another size than it was drawn at, by a turn it missed: made right before the touch counts)
+        if (Math.abs(this.host.clientWidth - this.w) > 1 || Math.abs(this.host.clientHeight - this.h) > 1) this.fitCanvas();
+        // The first finger of a new touch: any still held from before are fingers whose lifting never came (the phone
+        // turned mid-stroke, say). Left, this finger made a pinch with one that isn't there, and nothing drew again.
+        if (e.isPrimary && this.pointers.size > 0)
+        {
+            if (this.held) { if (this.held.cancel) this.held.cancel(); else this.held.end(); this.held = null; }
+            this.pointers.clear(); this.pinch = null;
+        }
+        try { this.canvas.setPointerCapture(e.pointerId); } catch (x) { }   // (a pointer the browser no longer has: carried on without)
         this.pointers.set(e.pointerId, this.at(e));
         this.moved = 0;
         this.downAt = performance.now();

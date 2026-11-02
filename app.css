@@ -142,6 +142,15 @@ svg { display: block; }
 
 /* the canvas to look around */
 .stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
+/* the canvas's own corner: the hierarchy and full screen (in full screen, still there, quieter, to come back out) */
+.corner { position: absolute; top: 10px; right: calc(var(--right) + 10px); z-index: 4; display: flex; gap: 6px; }
+.corner .icon { width: 42px; height: 42px; border-radius: var(--r-control); display: grid; place-items: center; background: var(--card); border: 1px solid var(--border); box-shadow: var(--menu-shadow); color: var(--ink); }
+.corner .icon:active { background: var(--button); }
+.corner .icon.on { color: var(--heading); }
+.project.full #head, .project.full .tabs { display: none; }
+.project.full .corner { top: calc(var(--top) + 10px); opacity: .55; transition: opacity .2s; }
+.project.full .corner:active, .project.full .corner:focus-within { opacity: 1; }
+.project.full .tools { bottom: calc(var(--bottom) + 12px); }
 .viewer { display: block; touch-action: none; }
 
 /* ---- a list or a board opened over the tabs ---- */
@@ -312,3 +321,28 @@ svg { display: block; }
 .update:active { background: var(--accent-deep); }
 .measure { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 5; padding: 8px 10px; border-radius: var(--r-control); background: rgba(0,0,0,.72); color: #9effc4; font: 11px/1.45 ui-monospace, Menlo, monospace; white-space: pre-wrap; pointer-events: none; }
 .masonry:has(> .col:only-child) { max-width: 640px; }   /* (one column: a readable width on a wide screen) */
+
+/* ---- the hierarchy: layers, and what is in each ---- */
+.htitle { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.htitle .quiet-button { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; }
+.hlist { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.hrow { display: flex; align-items: center; gap: 2px; min-height: 46px; border-radius: var(--r-control); background: var(--card); }
+.hrow.hlayer { margin-top: 8px; color: var(--heading); }
+.hrow.hlayer:first-child { margin-top: 0; }
+.hrow.hobj { padding-left: 10px; }
+.hrow.off .hname { opacity: .45; }
+.hrow.drawn { background: var(--chosen); }
+.hrow.drawn .hname { color: var(--heading); }
+.hrow.lifted { position: relative; z-index: 2; background: var(--button); box-shadow: var(--menu-shadow); }
+.hname { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 6px; border-radius: var(--r-control); text-align: left; font-size: 15px; }
+.hname span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hname svg { flex: none; }
+.hlayer .hname { font-weight: 600; font-size: 14px; }
+.hname:active { background: var(--chosen); }
+.hbtn { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--r-control); color: var(--faded); }
+.hbtn.set { color: var(--ink); }
+.hbtn:active { background: var(--button); }
+.hhandle { flex: none; width: 34px; height: 44px; display: grid; place-items: center; color: var(--faded); touch-action: none; cursor: grab; }
+.hhandle.none { cursor: default; }
+.hdrop { position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+.pick:disabled { opacity: .45; }

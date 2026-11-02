@@ -2,7 +2,7 @@
 // type and lists, each turned, slanted, faded, blended and clipped as it is there. Close, not exact: type lays out
 // with the browser's own shaping, and blurs and a path's dynamic corners are left out.
 
-import { placed } from "./cnpy.js";
+import { placed, order, movedTo, regrouped, hiddenLayers } from "./cnpy.js";
 
 const T = 256;   // a drawing's tiles, in pixels
 
@@ -314,7 +314,7 @@ function sizeOf(b)
     }
     return null;
 }
-function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row) and file names
+export function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row) and file names
 {
     if (!doc._tiles) doc._tiles = new Map();
     if (doc._tiles.has(folder)) return doc._tiles.get(folder);
@@ -334,25 +334,52 @@ function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row)
 export function scene(doc, view)
 {
     const lists = new Map(view.lists.map(l => [l.id, l]));
-    const items = doc.items.filter(o => !view.deleted.has(o.id) && !view.removed.has(o.id))
-        .map(o => o.kind === "list" && lists.has(o.id) ? lists.get(o.id) : view.moved.has(o.id) ? placed(o, view.moved.get(o.id)) : o)
-        .map(o => view.locks.has(o.id) ? { ...o, locked: view.locks.get(o.id) } : o);
+    const byId = new Map(doc.items.map(o => [o.id, o]));
+    // (in the order the hierarchy has left them; shown or hidden, renamed and put into a layer there)
+    const own = o =>
+    {
+        let q = o.kind === "list" && lists.has(o.id) ? lists.get(o.id) : view.moved.has(o.id) ? placed(o, view.moved.get(o.id)) : o;
+        if (view.locks.has(o.id)) q = { ...q, locked: view.locks.get(o.id) };
+        if (view.hides && view.hides.has(o.id)) q = { ...q, hidden: view.hides.get(o.id) };
+        if (view.names && view.names.has(o.id)) q = { ...q, name: view.names.get(o.id) };
+        const lay = movedTo(view, o.id);
+        if (lay) q = { ...q, ...regrouped(doc, o, lay) };
+        return q;
+    };
+    const items = order(doc, view).map(id => byId.get(id)).filter(o => o && !view.deleted.has(o.id) && !view.removed.has(o.id)).map(own);
     for (const l of view.lists) if (l.fresh) items.push(l);
     for (const r of view.restored) items.push(r.by ? placed(r.item, r.by) : r.item);
-    for (const k of view.sketches || []) items.push(sketchItem(k));   // drawings made here, on top until saved
+    for (const k of view.sketches || [])
+    {
+        // Drawings made here, on top until saved; strokes on a saved one, drawn with it (its pixels and them together).
+        if (!k.base) { items.push(sketchItem(k)); continue; }
+        const at = items.findIndex(o => o.id === k.base);
+        if (at >= 0) items[at] = { ...items[at], strokes: k.strokes };
+    }
+    for (const m of view.merges || [])
+    {
+        // A drawing merged down, not yet saved: drawn with the one it went into, over it (it is one in the hierarchy).
+        const at = items.findIndex(o => o.id === m.into), up = byId.get(m.id);
+        if (at < 0 || !up) continue;
+        const k = (view.sketches || []).find(x => x.base === m.id);
+        const q = own(up);
+        items[at] = { ...items[at], merged: (items[at].merged || []).concat([k ? { ...q, strokes: k.strokes } : q]) };
+    }
     for (const p of view.photos) items.push({ kind: "image", locked: !!p.locked, id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
     const masks = new Map();   // a clipped group's path → its mask (the topmost of it, marked as one)
     const top = new Map();
     for (const o of items) if (o.group) { const ids = o.group.split("/"); for (let k = 1; k <= ids.length; k++) top.set(ids.slice(0, k).join("/"), o); }
     for (const [g, o] of top) if (o.clip && o.group === g) masks.set(g, o);
-    return { doc, items, masks, boards: doc.boards.filter(b => !view.goneBoards.has(b.id)).concat(view.boards) };
+    return { doc, items, masks, hides: hiddenLayers(doc, view), boards: doc.boards.filter(b => !view.goneBoards.has(b.id)).concat(view.boards) };
 }
 
-function hidden(doc, o)
+// Hidden: itself, or a group or layer it is in ("sc": the scene, with the layers as hidden here; else the file's).
+export function hidden(sc, o)
 {
     if (o.hidden) return true;
-    if (!o.group || doc.hides.size === 0) return false;
-    return o.group.split("/").some(id => doc.hides.has(id));
+    const hides = sc.hides || sc.doc.hides;
+    if (!o.group || hides.size === 0) return false;
+    return o.group.split("/").some(id => hides.has(id));
 }
 function fade(doc, o) { let a = o.opacity === undefined ? 1 : o.opacity; if (o.group && doc.fades.size) for (const id of o.group.split("/")) if (doc.fades.has(id)) a *= doc.fades.get(id); return a; }
 
@@ -382,7 +409,7 @@ export function extent(sc, ctx)
 {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     const add = b => { if (!(b.w >= 0) || !isFinite(b.x)) return; x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); };
-    sc.items.forEach(o => { if (!hidden(sc.doc, o)) add(outer(o, ctx)); });
+    sc.items.forEach(o => { if (!hidden(sc, o)) add(outer(o, ctx)); });
     sc.boards.forEach(add);
     return x0 === Infinity ? { x: 0, y: 0, w: 1000, h: 800 } : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
@@ -418,7 +445,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
     }
     for (const o of sc.items)
     {
-        if (hidden(doc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
+        if (hidden(sc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
         if (!meets(outer(o, ctx))) continue;
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(1, fade(doc, o)));
@@ -490,6 +517,23 @@ export function drawStrokes(g, strokes)
     }
 }
 let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then laid on the view)
+
+// A drawing layer's tiles, drawn into its box: its frame (the pixels it was saved with) fills it.
+function paintTiles(ctx, o, b, doc, get)
+{
+    const tiles = tilesOf(doc, o.file);
+    if (tiles.length === 0 || !(b.w > 0) || !(b.h > 0)) return;
+    let a = o.frame && o.frame.w > 0 ? o.frame : null;
+    if (!a)
+    {
+        // (an older file: what its tiles cover)
+        const cs = tiles.map(t => t.c), rs = tiles.map(t => t.r);
+        a = { x: Math.min(...cs) * T, y: Math.min(...rs) * T, w: (Math.max(...cs) - Math.min(...cs) + 1) * T, h: (Math.max(...rs) - Math.min(...rs) + 1) * T };
+    }
+    const sx = b.w / a.w, sy = b.h / a.h;
+    ctx.transform(sx, 0, 0, sy, b.x - a.x * sx, b.y - a.y * sy);
+    for (const t of tiles) { const got = get(t.file); if (got) ctx.drawImage(got.img, t.c * T, t.r * T, T, T); }
+}
 
 function turn(ctx, o, b) { if (o.angle || o.shear) { const m = placing(o, b); ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f); } }
 function flip(ctx, o, b)
@@ -744,19 +788,29 @@ function drawOne(ctx, o, doc, s, get, redraw)
         }
         case "paint":
         {
-            const tiles = tilesOf(doc, o.file);
-            if (tiles.length === 0) return;
-            let a = o.frame && o.frame.w > 0 ? o.frame : null;
-            if (!a)
-            {
-                // (an older file: what its tiles cover)
-                const cs = tiles.map(t => t.c), rs = tiles.map(t => t.r);
-                a = { x: Math.min(...cs) * T, y: Math.min(...rs) * T, w: (Math.max(...cs) - Math.min(...cs) + 1) * T, h: (Math.max(...rs) - Math.min(...rs) + 1) * T };
-            }
             if (!(b.w > 0) || !(b.h > 0)) return;
-            const sx = b.w / a.w, sy = b.h / a.h;
-            ctx.transform(sx, 0, 0, sy, b.x - a.x * sx, b.y - a.y * sy);
-            for (const t of tiles) { const got = get(t.file); if (got) ctx.drawImage(got.img, t.c * T, t.r * T, T, T); }
+            if (o.strokes || o.merged)
+            {
+                // Strokes on it not yet saved, or a drawing merged into it: drawn together on a canvas of their own (so
+                // the eraser rubs out its pixels too, and nothing else), then laid on.
+                const m = ctx.getTransform(), cv = ctx.canvas;
+                if (!sketchCanvas) sketchCanvas = document.createElement("canvas");
+                if (sketchCanvas.width !== cv.width || sketchCanvas.height !== cv.height) { sketchCanvas.width = cv.width; sketchCanvas.height = cv.height; }
+                const g = sketchCanvas.getContext("2d");
+                g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height);
+                g.setTransform(m);
+                for (const one of [o].concat(o.merged || []))
+                {
+                    g.save();
+                    g.globalAlpha = one === o ? 1 : Math.max(0, Math.min(1, one.opacity === undefined ? 1 : one.opacity));
+                    paintTiles(g, one, one === o ? b : box(one, g), doc, get);
+                    g.restore();
+                    if (one.strokes) drawStrokes(g, one.strokes);
+                }
+                ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(sketchCanvas, 0, 0); ctx.restore();
+                return;
+            }
+            paintTiles(ctx, o, b, doc, get);
             return;
         }
         case "rect": case "oval":
@@ -940,7 +994,7 @@ export function objectAt(sc, x, y, slack)
     for (let i = sc.items.length - 1; i >= 0; i--)
     {
         const o = sc.items[i];
-        if (hidden(sc.doc, o) || (o.clip && sc.masks.get(o.group) === o) || o.kind === "sketch") continue;   // (a drawing made here: not picked until saved)
+        if (hidden(sc, o) || (o.clip && sc.masks.get(o.group) === o) || o.kind === "sketch") continue;   // (a drawing made here: not picked until saved)
         if (o.kind === "line" || o.kind === "arrow")
         {
             const dx = o.bx - o.ax, dy = o.by - o.ay, len = dx * dx + dy * dy, t = len ? Math.max(0, Math.min(1, ((x - o.ax) * dx + (y - o.ay) * dy) / len)) : 0;
@@ -961,7 +1015,7 @@ export function listAt(sc, x, y, ctx)
     for (let i = sc.items.length - 1; i >= 0; i--)
     {
         const o = sc.items[i];
-        if (o.kind !== "list" || hidden(sc.doc, o)) continue;
+        if (o.kind !== "list" || hidden(sc, o)) continue;
         const b = box(o, ctx);
         if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return o;
     }

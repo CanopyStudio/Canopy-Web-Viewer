@@ -233,6 +233,7 @@ export function write(doc, view, drawn)
     const lines = doc.lines.slice();
     const byId = new Map(view.lists.map(l => [l.id, l]));
     const cuts = [];   // lines taken out or put in: { from, to, put }, done last, from the end, so earlier places stay put
+    const repainted = new Map((drawn || []).filter(k => k.base).map(k => [k.id, k]));   // saved drawings drawn on here
     for (const o of doc.items)
     {
         if (view.removed.has(o.id) || view.deleted.has(o.id)) { cuts.push({ from: o.metaLine >= 0 ? o.metaLine : o.line, to: o.kind === "list" ? o.end : o.lastLine + 1, put: [] }); continue; }   // (its lines, all of them)
@@ -243,6 +244,35 @@ export function write(doc, view, drawn)
             while (m.length < 6) m.push("");
             m[5] = view.locks.get(o.id) ? m[5] + "L" : m[5].replace(/L/g, "");
             lines[o.metaLine] = "meta " + m.join("|");
+        }
+        if (o.metaLine >= 0 && (view.hides.has(o.id) || movedTo(view, o.id)))
+        {
+            // Shown or hidden here ("H" in its flags), or put into another layer (its groups).
+            const m = lines[o.metaLine].substring(5).split("|");
+            while (m.length < 6) m.push("");
+            if (view.hides.has(o.id)) m[5] = view.hides.get(o.id) ? m[5].replace(/H/g, "") + "H" : m[5].replace(/H/g, "");
+            const lay = movedTo(view, o.id);
+            if (lay) { const g = regrouped(doc, o, lay); m[1] = g.group; m[3] = escape(g.groupName); }
+            lines[o.metaLine] = "meta " + m.join("|");
+        }
+        if (view.names.has(o.id) && NAME_AT[lines[o.line].split(" ")[0]] !== undefined)
+        {
+            const key = lines[o.line].split(" ")[0], f = lines[o.line].substring(key.length + 1).split("|"), at = NAME_AT[key];
+            while (f.length <= at) f.push("");
+            f[at] = escape(view.names.get(o.id));
+            lines[o.line] = key + " " + f.join("|");
+        }
+        const again = repainted.get(o.id);
+        if (again)
+        {
+            // Its pixels painted again (in a folder of their own): its box and frame as they now are, the rest as it was.
+            const f = lines[o.line].substring(6).split("|");
+            while (f.length < 12) f.push("0");
+            f[0] = again.folder; f[1] = n(again.box.x); f[2] = n(again.box.y); f[3] = n(again.box.w); f[4] = n(again.box.h);
+            if (!f[7] || f[7] === "0") f[7] = escape(again.name || "");
+            f[8] = again.frame.x; f[9] = again.frame.y; f[10] = again.frame.w; f[11] = again.frame.h;
+            lines[o.line] = "paint " + f.join("|");
+            continue;
         }
         if (o.kind !== "list") { const t = view.moved.get(o.id); if (t) lines[o.line] = placedLine(lines[o.line], o, t); continue; }
         const now = byId.get(o.id);
@@ -266,6 +296,32 @@ export function write(doc, view, drawn)
         const left = [...new Set([...doc.locks].filter(id => !view.unlocked.has(id)).concat([...view.relocked]))].sort();
         if (doc.locksLine >= 0) cuts.push({ from: doc.locksLine, to: doc.locksLine + 1, put: left.length ? ["locks " + left.join(" ")] : [] });
         else if (left.length) { const at = doc.boardsLine >= 0 ? doc.boardsLine : 1; cuts.push({ from: at, to: at, put: ["locks " + left.join(" ")] }); }
+    }
+    if (view.zorder && view.zorder.length && doc.items.length)
+    {
+        // Put above one another here: the objects' lines (each with what was done to it above) laid out again in their
+        // new order, in place of where they were. Anything between them that is no object's stays, first.
+        const start = o => o.metaLine >= 0 ? o.metaLine : o.line, end = o => o.kind === "list" ? o.end : o.lastLine + 1;
+        const from = Math.min(...doc.items.map(start)), to = Math.max(...doc.items.map(end));
+        const mine = new Array(to - from).fill(false);
+        for (const o of doc.items) for (let i = start(o); i < end(o); i++) mine[i - from] = true;
+        const block = new Map(doc.items.map(o =>
+        {
+            if (view.removed.has(o.id) || view.deleted.has(o.id)) return [o.id, []];
+            const now = o.kind === "list" ? byId.get(o.id) : null;
+            return [o.id, now ? lines.slice(start(o), o.start).concat(now.rows.map(rowLine)) : lines.slice(start(o), end(o))];
+        }));
+        const put = lines.slice(from, to).filter((l, i) => !mine[i]);
+        for (const id of order(doc, view)) put.push(...(block.get(id) || []));
+        for (let i = cuts.length - 1; i >= 0; i--) if (cuts[i].from >= from && cuts[i].to <= to) cuts.splice(i, 1);   // (done in the blocks)
+        cuts.push({ from, to, put });
+    }
+    if (view.layerHides && view.layerHides.size)
+    {
+        // Layers shown or hidden here: the "hides" line as it now is (gone when none are; made when there was none).
+        const left = [...hiddenLayers(doc, view)].sort(), at = doc.lines.findIndex(l => l.startsWith("hides "));
+        if (at >= 0) cuts.push({ from: at, to: at + 1, put: left.length ? ["hides " + left.join(" ")] : [] });
+        else if (left.length) { const b = doc.boardsLine >= 0 ? doc.boardsLine : 1; cuts.push({ from: b, to: b, put: ["hides " + left.join(" ")] }); }
     }
     for (const b of doc.boards) if (view.goneBoards.has(b.id)) cuts.push({ from: b.line, to: b.line + 1, put: [] });
     if (view.order)
@@ -293,7 +349,7 @@ export function write(doc, view, drawn)
     for (const r of view.restored) added.push(...(r.by ? r.lines.map((l, i) => i === r.body ? placedLine(l, r.item, r.by) : l) : r.lines));   // (deleted, saved, and then brought back)
     // Drawings made here, painted into tiles (paintSketches): drawing layers as Board writes them, their pixels in the
     // folder named for them, at Density pixels to a unit from the canvas's corner.
-    for (const k of drawn || [])
+    for (const k of (drawn || []).filter(k => !k.base))
         added.push(metaLine(k.id, k.layer, k.author, false), "paint " + [k.id + "/", n(k.frame.x / DENSITY), n(k.frame.y / DENSITY), n(k.frame.w / DENSITY), n(k.frame.h / DENSITY), 0, 0, escape(k.name), k.frame.x, k.frame.y, k.frame.w, k.frame.h].join("|"));
     lines.splice(tail, 0, ...added);
     return lines.join("\n");
@@ -331,11 +387,22 @@ export async function open(bytes)
 export async function save(doc, view, pictures, drawn)
 {
     const text = write(doc, view, drawn);
-    for (const k of drawn || []) for (const [name, bytes] of k.tiles) doc.zip.file(k.id + "/" + name, bytes, { compression: "STORE" });
+    const gone = [];   // a drawing painted again: its old tiles left out of the file (the new are in a folder of their own)
+    for (const k of drawn || [])
+    {
+        // (and those of any drawing merged into it; but not a folder a copy of one still uses)
+        for (const folder of k.base ? [k.old].concat(k.drop || []) : [])
+        {
+            if (!folder.endsWith("/") || doc.items.some(o => o.file === folder && o.id !== k.id && !view.removed.has(o.id) && !view.deleted.has(o.id))) continue;
+            for (const path of Object.keys(doc.zip.files)) if (path.startsWith(folder)) { gone.push([path, doc.zip.files[path]]); delete doc.zip.files[path]; }
+        }
+        for (const [name, bytes] of k.tiles) doc.zip.file((k.base ? k.folder : k.id + "/") + name, bytes, { compression: "STORE" });
+    }
     doc.zip.file("layers.txt", (doc.bom ? "\uFEFF" : "") + text, { compression: "DEFLATE" });
     for (const p of view.photos) if (!doc.zip.file(p.file) && pictures.has(p.file)) doc.zip.file(p.file, pictures.get(p.file), { compression: "STORE" });
     for (const r of view.restored) if (r.item.kind === "image" && !doc.zip.file(r.item.file) && pictures.has(r.item.file)) doc.zip.file(r.item.file, pictures.get(r.item.file), { compression: "STORE" });   // (pasted from another project)
-    return await doc.zip.generateAsync({ type: "uint8array" });
+    try { return await doc.zip.generateAsync({ type: "uint8array" }); }
+    finally { for (const [path, f] of gone) doc.zip.files[path] = f; }   // (kept here until the file saved is read back: it still shows them)
 }
 
 // ---- changes ----
@@ -347,6 +414,9 @@ export function apply(doc, steps)
     const lists = doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) }));
     const photos = [], deleted = new Set(), removed = new Set(), moved = new Map(), boards = [], locks = new Map(), unlocked = new Set();
     const relocked = new Set(), goneBoards = new Set(), restored = [];
+    // The hierarchy's: objects shown or hidden, renamed, put above another (and into its layer), layers shown or hidden,
+    // and drawings merged down (each into the one below, painted together as it is saved).
+    const hides = new Map(), names = new Map(), zorder = [], layerHides = new Map(), merges = [];
     const sketches = [];   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
     let order = null;   // the lists' order, once set here
     const items = new Map(doc.items.map(o => [o.id, o]));
@@ -362,7 +432,7 @@ export function apply(doc, steps)
             let k = sketches.find(o => o.id === s.id);
             if (s.t === "stroke")
             {
-                if (!k) sketches.push(k = { id: s.id, name: s.name, layer: s.layer, author: s.author, strokes: [] });
+                if (!k) sketches.push(k = { id: s.id, base: s.base || null, name: s.name, layer: s.layer, author: s.author, strokes: [] });   // ("base": a saved drawing these go onto)
                 if (!k.strokes.some(o => o.sid === s.stroke.sid)) k.strokes.push(s.stroke);
             }
             else if (k) { k.strokes = k.strokes.filter(o => o.sid !== s.sid); if (k.strokes.length === 0) sketches.splice(sketches.indexOf(k), 1); }
@@ -390,6 +460,12 @@ export function apply(doc, steps)
             continue;
         }
         if (s.t === "order") { order = s.ids.slice(); continue; }
+        if (s.t === "hide") { for (const id of s.ids) hides.set(id, s.on); continue; }
+        if (s.t === "rename") { names.set(s.id, s.name); continue; }
+        if (s.t === "zorder") { if (items.has(s.id)) zorder.push({ id: s.id, after: s.after, layer: s.layer || null }); continue; }
+        if (s.t === "hidelayer") { layerHides.set(s.id, s.on); continue; }
+        if (s.t === "merge") { if (items.has(s.id) && items.has(s.into)) { merges.push({ id: s.id, into: s.into }); removed.add(s.id); } continue; }
+        if (s.t === "unmerge") { const k = merges.findIndex(m => m.id === s.id); if (k >= 0) { merges.splice(k, 1); removed.delete(s.id); } continue; }
         if (s.t === "newboard") { if (goneBoards.has(s.board.id)) goneBoards.delete(s.board.id); else if (!doc.boards.some(b => b.id === s.board.id) && !boards.some(b => b.id === s.board.id)) boards.push({ ...s.board }); continue; }
         if (s.t === "delboard") { const k = boards.findIndex(b => b.id === s.id); if (k >= 0) boards.splice(k, 1); else if (doc.boards.some(b => b.id === s.id)) goneBoards.add(s.id); continue; }
         if (s.t === "restore")
@@ -422,8 +498,43 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches };
+    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, zorder, layerHides, merges };
 }
+
+// ---- the hierarchy's changes ----
+
+// The file's objects in the order they are drawn (bottom first) once put above one another here: each move takes an
+// object out and puts it just above "after" (or at the very bottom, for none).
+export function order(doc, view)
+{
+    const ids = doc.items.map(o => o.id);
+    for (const z of view.zorder || [])
+    {
+        const at = ids.indexOf(z.id);
+        if (at < 0) continue;
+        ids.splice(at, 1);
+        const k = z.after ? ids.indexOf(z.after) : -1;
+        ids.splice(k < 0 ? (z.after ? ids.length : 0) : k + 1, 0, z.id);
+    }
+    return ids;
+}
+// The layer an object was put into here (the last move that says one), or null.
+export function movedTo(view, id) { let l = null; for (const z of view.zorder || []) if (z.id === id && z.layer) l = z.layer; return l; }
+// Its groups with the layer it was put into in place of the one it was in (the groups inside it left behind: it goes
+// in on its own).
+export function regrouped(doc, o, layer)
+{
+    return { group: layer.id, groupName: layer.name };
+}
+// The layers' ids hidden, as they are here.
+export function hiddenLayers(doc, view)
+{
+    const out = new Set(doc.hides);
+    for (const [id, on] of view.layerHides || []) if (on) out.add(id); else out.delete(id);
+    return out;
+}
+// An object's own name, on its body line, by its kind (where each kind keeps it).
+const NAME_AT = { image: 9, item: 9, type: 16, shape: 9, path: 11, paint: 7 };
 
 // ---- undoing: what a step would be undone by, worked out from the project as it is before the step ----
 
@@ -504,7 +615,7 @@ export function inverse(doc, view, s)
     switch (s.t)
     {
         case "stroke": return [{ t: "unstroke", list: null, id: s.id, sid: s.stroke.sid }];
-        case "unstroke": { const k = view.sketches.find(o => o.id === s.id), st = k && k.strokes.find(o => o.sid === s.sid); return st ? [{ t: "stroke", list: null, id: k.id, name: k.name, layer: k.layer, author: k.author, stroke: st }] : []; }
+        case "unstroke": { const k = view.sketches.find(o => o.id === s.id), st = k && k.strokes.find(o => o.sid === s.sid); return st ? [{ t: "stroke", list: null, id: k.id, base: k.base, name: k.name, layer: k.layer, author: k.author, stroke: st }] : []; }
         case "set": { const r = l && l.rows.find(o => o.id === s.id); return r ? [{ t: "set", list, id: s.id, fields: old(r, s.fields) }] : []; }
         case "add": return [{ t: "del", list, id: s.row.id }];
         case "del": { const k = l ? l.rows.findIndex(o => o.id === s.id) : -1; return k < 0 ? [] : [{ t: "add", list, row: { ...l.rows[k] }, after: k > 0 ? l.rows[k - 1].id : null }]; }
@@ -520,6 +631,26 @@ export function inverse(doc, view, s)
         case "newboard": return [{ t: "delboard", list: null, id: s.board.id }];
         case "order": return [{ t: "order", list: null, ids: (view.order || doc.listOrder).slice() }];
         case "delboard": { const b = doc.boards.concat(view.boards).find(o => o.id === s.id); return b ? [{ t: "newboard", list: null, board: { id: b.id, x: b.x, y: b.y, w: b.w, h: b.h, name: b.name } }] : []; }
+        case "hide":
+        {
+            const was = id => view.hides.has(id) ? view.hides.get(id) : !!(doc.items.find(x => x.id === id) || {}).hidden;
+            const on = s.ids.filter(was), off = s.ids.filter(id => !was(id)), out = [];
+            if (on.length) out.push({ t: "hide", list: null, ids: on, on: true });
+            if (off.length) out.push({ t: "hide", list: null, ids: off, on: false });
+            return out;
+        }
+        case "rename": { const o = doc.items.find(x => x.id === s.id); return o ? [{ t: "rename", list: null, id: s.id, name: view.names.has(s.id) ? view.names.get(s.id) : o.name }] : []; }
+        case "zorder":
+        {
+            // Back above the one it was above (or at the bottom), in the layer it was in.
+            const ids = order(doc, view), at = ids.indexOf(s.id), o = doc.items.find(x => x.id === s.id);
+            if (at < 0 || !o) return [];
+            const lay = movedTo(view, s.id) || layerOf(doc, o);
+            return [{ t: "zorder", list: null, id: s.id, after: at > 0 ? ids[at - 1] : null, layer: s.layer ? lay : null }];
+        }
+        case "hidelayer": return [{ t: "hidelayer", list: null, id: s.id, on: hiddenLayers(doc, view).has(s.id) }];
+        case "merge": return [{ t: "unmerge", list: null, id: s.id }];
+        case "unmerge": { const m = (view.merges || []).find(x => x.id === s.id); return m ? [{ t: "merge", list: null, id: m.id, into: m.into }] : []; }
         case "lock":
         {
             // Each back as it was (locked or not), and the groups unlocked with it locked again (or the other way).

@@ -4,7 +4,7 @@
     python3 tools/from-board.py [path to Canopy Apps] --check  only says what differs (nothing is written)
 
 From Board's own files: its themes (Board/Themes) and sizes (Board/style.json) into js/look.js; its icons (Board/Icons,
-else Kit/Icons) into js/icons.js; and icons.html, a page of every icon the viewer uses, where each comes from and
+else Kit/Icons, else Viewer/Icons) into js/icons.js; and icons.html, a page of every icon the viewer uses, where each comes from and
 where it is used. The Canopy Apps folder is looked for beside this repo when no path is given."""
 import json, os, re, sys
 
@@ -27,7 +27,18 @@ ICONS = [
     ("folder", "folder", "A folder's row"),
     ("file", "file", "A project"),
     ("photo", "file image", "Add a photo; an image's row"),
-    ("fit", "full", "Fit everything, fit the board"),
+    ("fit", "fit", "Fit everything, fit the board"),
+    ("full", "full", "Full screen, on the canvas, and out of it"),
+    ("layers", "panel Layers", "The hierarchy, on the canvas and the drawing bar"),
+    ("eye", "eye", "The hierarchy: shown"),
+    ("eyeoff", "eyeoff", "The hierarchy: hidden"),
+    ("group", "group", "The hierarchy: a group"),
+    ("kind-rect", "Rect", "The hierarchy: a rectangle"),
+    ("kind-oval", "Oval", "The hierarchy: a circle"),
+    ("kind-line", "Line", "The hierarchy: a line"),
+    ("kind-arrow", "Arrow", "The hierarchy: an arrow"),
+    ("kind-path", "Path", "The hierarchy: a path"),
+    ("kind-type", "Type", "The hierarchy: type"),
     ("lists", "List", "The Lists tab"),
     ("boards", "panel Boards", "The Boards tab"),
     ("canvas", "kind grid", "The Canvas tab"),
@@ -59,7 +70,7 @@ def loose_json(path):   # (Board's files have // comments)
 
 def icon_svg(apps, name):
     mirror = name.startswith("~"); name = name.lstrip("~")
-    for where in ("Board/Icons", "Kit/Icons"):
+    for where in ("Board/Icons", "Kit/Icons", "Viewer/Icons"):
         f = os.path.join(apps, where, name + ".svg")
         if os.path.exists(f): break
     else: return None, None
@@ -68,6 +79,9 @@ def icon_svg(apps, name):
     inner = re.search(r"<svg[^>]*>(.*)</svg>", t, re.S).group(1)
     inner = re.sub(r'\s*(data-min-width|stroke-miterlimit)="[^"]*"', "", inner)
     inner = re.sub(r"\s*\n\s*", "", inner).strip()
+    # Drawn in the icon's color, as Board draws them (the file's own colors are the designer's view of it), unless the
+    # icon keeps its own (data-tint="own").
+    if 'data-tint="own"' not in t: inner = re.sub(r'(fill|stroke)="(#[0-9A-Fa-f]{3,8}|black|white)"', r'\1="currentColor"', inner)
     if box != "0 0 24 24": inner = '<svg viewBox="%s" width="24" height="24">%s</svg>' % (box, inner)   # (drawn in an area of its own)
     if mirror: inner = '<g transform="matrix(-1 0 0 1 24 0)">%s</g>' % inner
     return inner, os.path.relpath(f, apps).replace(os.sep, "/")
@@ -103,7 +117,7 @@ def build(apps):
         "<style>body{margin:0;padding:24px;background:#161717;color:#EAECEB;font:14px/1.4 system-ui,sans-serif}h1{font-size:18px;margin:0 0 6px}"
         "p{color:#A5A8A7;margin:0 0 18px}table{border-collapse:collapse;width:100%;max-width:980px}td{padding:8px 10px;border-top:1px solid #343A38;vertical-align:middle}"
         "td.i{width:40px;color:#EAECEB}code{color:#A5A8A7;font-size:12px}</style></head><body>\n"
-        "<h1>The web viewer's icons</h1><p>Each is one of Canopy Board's own (Board/Icons, else Kit/Icons), copied in by tools/from-board.py.</p>\n"
+        "<h1>The web viewer's icons</h1><p>Each is one of Canopy Board's own (Board/Icons, else Kit/Icons, else Viewer/Icons), copied in by tools/from-board.py.</p>\n"
         "<table><tr><td></td><td><b>Here</b></td><td><b>Board's icon</b></td><td><b>Its file</b></td><td><b>Where it's used</b></td></tr>\n" + cells + "</table></body></html>\n")
     return out, missing
 
