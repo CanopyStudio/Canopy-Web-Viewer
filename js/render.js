@@ -736,13 +736,24 @@ function tipInto(path)
         path.closePath();
     };
 }
+// (its stamps kept in paths of a few dozen each, filled one by one: one path of thousands of stamps, a long stroke's,
+// is more than a phone's browser can fill quickly, or at all)
+const STAMPS_PER_PATH = 48;
 function flatInto(g, st)
 {
     const n = st.pts.length / 3;
     let kept = stamped.get(st);
-    if (!kept || kept.upto > n || kept.size !== st.size) { kept = { path: new Path2D(), upto: 0, carry: 0, size: st.size }; stamped.set(st, kept); }
-    if (n > kept.upto) { kept.carry = flatStamps(tipInto(kept.path), st, kept.upto, n, kept.carry); kept.upto = n; }
-    g.fill(kept.path, "nonzero");
+    if (!kept || kept.upto > n || kept.size !== st.size) { kept = { paths: [], last: null, count: 0, upto: 0, carry: 0, size: st.size }; stamped.set(st, kept); }
+    if (n > kept.upto)
+    {
+        const tip = (x, y, w) =>
+        {
+            if (!kept.last || kept.count >= STAMPS_PER_PATH) { kept.last = new Path2D(); kept.paths.push(kept.last); kept.count = 0; }
+            tipInto(kept.last)(x, y, w); kept.count++;
+        };
+        kept.carry = flatStamps(tip, st, kept.upto, n, kept.carry); kept.upto = n;
+    }
+    for (const path of kept.paths) g.fill(path, "nonzero");
 }
 // A fill (a picture of what it filled, made when it was tapped), a selection rubbed out ("clear"), or one moved ("move":
 // the paint inside its outline taken out and put back "dx", "dy" along): drawn onto what the drawing has so far.
