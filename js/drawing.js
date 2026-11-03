@@ -446,7 +446,7 @@ function strokeFrom(v, at, e)
 // The Eyedropper: the color drawn where it is pressed (as the screen shows it), to paint with; back to the brush.
 export function dropperAt(v, at)
 {
-    const px = v.snapshot().getContext("2d").getImageData(Math.round(at.x * v.dpr), Math.round(at.y * v.dpr), 1, 1).data;   // (as it shows, the drawing on the graphics chip too)
+    const shot = v.snapshot(), px = shot.getContext("2d").getImageData(Math.round(at.x * v.dpr), Math.round(at.y * v.dpr), 1, 1).data; shot.width = shot.height = 0;   // (as it shows, the drawing on the graphics chip too)
     pen.color = "#" + [px[0], px[1], px[2]].map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase();
     pen.kind = pen.slots.brush;
     keepPen(); tools(v);
@@ -460,7 +460,8 @@ export function fillAt(v, at)
 {
     const W = v.canvas.width, H = v.canvas.height, sx = Math.round(at.x * v.dpr), sy = Math.round(at.y * v.dpr);
     if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
-    const px = v.snapshot().getContext("2d").getImageData(0, 0, W, H).data, at0 = (sy * W + sx) * 4;   // (as it shows, the drawing on the graphics chip too)
+    const shot = v.snapshot(), px = shot.getContext("2d").getImageData(0, 0, W, H).data, at0 = (sy * W + sx) * 4;   // (as it shows, the drawing on the graphics chip too)
+    shot.width = shot.height = 0;
     const r0 = px[at0], g0 = px[at0 + 1], b0 = px[at0 + 2], tol = 48;
     const like = i => Math.abs(px[i] - r0) + Math.abs(px[i + 1] - g0) + Math.abs(px[i + 2] - b0) <= tol;
     // (each pixel put on the stack once at most: marked as it is, so the stack is never more than the view's pixels)
@@ -494,6 +495,7 @@ export function fillAt(v, at)
     g.putImageData(out, 0, 0);
     const a = v.toCanvas(x0 / v.dpr, y0 / v.dpr), s = v.cam.s * v.dpr;
     step(strokeStep(drawTarget(false), { kind: "fill", img: cv.toDataURL("image/png"), x: Math.round(a.x * 100) / 100, y: Math.round(a.y * 100) / 100, w: Math.round(w / s * 100) / 100, h: Math.round(h / s * 100) / 100 }));
+    cv.width = cv.height = 0;
     feel.drop();
     redrawViewers();
 }

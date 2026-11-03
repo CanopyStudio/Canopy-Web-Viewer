@@ -753,6 +753,7 @@ function outlinePath(g, pts)
     for (let i = 0; i < pts.length; i += 2) if (i === 0) g.moveTo(pts[0], pts[1]); else g.lineTo(pts[i], pts[i + 1]);
     g.closePath();
 }
+let movePiece = null;   // (a selection moved: its piece's canvas, used again)
 function drawEdit(g, st)
 {
     g.save();
@@ -764,17 +765,32 @@ function drawEdit(g, st)
     else if (st.kind === "clear") { g.globalCompositeOperation = "destination-out"; outlinePath(g, st.pts); g.fillStyle = "#000"; g.fill(); }
     else
     {
-        // (in the canvas's own pixels: the piece copied out, the place rubbed out, the piece laid on along the way)
-        const cv = g.canvas, m = g.getTransform();
-        const piece = document.createElement("canvas");
-        piece.width = cv.width; piece.height = cv.height;
-        const pc = piece.getContext("2d");
-        pc.setTransform(m); outlinePath(pc, st.pts); pc.clip();
-        pc.setTransform(1, 0, 0, 1, 0, 0); pc.drawImage(cv, 0, 0);
-        g.globalCompositeOperation = "destination-out"; outlinePath(g, st.pts); g.fillStyle = "#000"; g.fill();
+        // (in the canvas's own pixels: the piece copied out, only as big as its outline, the place rubbed out, the
+        // piece laid on along the way; its canvas let go at once, as a phone's browser allows only so much canvas)
+        const cv = g.canvas, m = g.getTransform(), p = st.pts;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (let i = 0; i < p.length; i += 2)
+        {
+            const X = m.a * p[i] + m.c * p[i + 1] + m.e, Y = m.b * p[i] + m.d * p[i + 1] + m.f;
+            if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y;
+        }
+        x0 = Math.max(0, Math.floor(x0) - 2); y0 = Math.max(0, Math.floor(y0) - 2); x1 = Math.min(cv.width, Math.ceil(x1) + 2); y1 = Math.min(cv.height, Math.ceil(y1) + 2);
+        const piece = x1 > x0 && y1 > y0 ? (movePiece || (movePiece = document.createElement("canvas"))) : null;
+        if (piece)
+        {
+            piece.width = x1 - x0; piece.height = y1 - y0;
+            const pc = piece.getContext("2d");
+            pc.setTransform(m.a, m.b, m.c, m.d, m.e - x0, m.f - y0); outlinePath(pc, p); pc.clip();
+            pc.setTransform(1, 0, 0, 1, 0, 0); pc.drawImage(cv, -x0, -y0);
+        }
+        g.globalCompositeOperation = "destination-out"; outlinePath(g, p); g.fillStyle = "#000"; g.fill();
         g.globalCompositeOperation = "source-over";
-        g.setTransform(1, 0, 0, 1, m.a * st.dx + m.c * st.dy, m.b * st.dx + m.d * st.dy);
-        g.drawImage(piece, 0, 0);
+        if (piece)
+        {
+            g.setTransform(1, 0, 0, 1, x0 + m.a * st.dx + m.c * st.dy, y0 + m.b * st.dx + m.d * st.dy);
+            g.drawImage(piece, 0, 0);
+            piece.width = piece.height = 0;
+        }
     }
     g.restore();
 }
@@ -785,6 +801,15 @@ let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then l
 // the view, still, needs it sharper than it is. Its first "upto" strokes (a stroke under way left off). False when
 // the view needs it sharper than it can be kept (then drawn as it is).
 const keptDrawings = new Map();   // by drawing: { canvas, k (its pixels to a canvas unit), x, y, w, h, n (strokes on it), last, merged, loaded }
+// One let go: its canvases emptied at once (a phone's browser counts a canvas until it is collected, and allows only so
+// much in all).
+function dropKept(id)
+{
+    const c = keptDrawings.get(id);
+    if (!c) return;
+    for (const cv of [c.canvas, c.lifted && c.lifted.piece, c.lifted && c.lifted.hole]) if (cv) cv.width = cv.height = 0;
+    keptDrawings.delete(id);
+}
 function keptDrawing(ctx, o, b, doc, get, m, upto)
 {
     const strokes = (o.strokes || []).slice(0, upto), last = strokes[strokes.length - 1];
@@ -834,7 +859,7 @@ function keepDrawn(o, b, doc, get, m, upto)
         const most = Math.min(4096 / Math.max(r.w, r.h), Math.sqrt(8e6 / (r.w * r.h)));
         if (most < need * 0.5 && !moving) return false;   // (too big to keep as sharp as it is shown: drawn as it is)
         const k = Math.min(most, need * 1.25);   // (a little sharper than shown, to be zoomed into a little)
-        if (!c) { c = { canvas: document.createElement("canvas"), ver: 0 }; keptDrawings.set(o.id, c); if (keptDrawings.size > 2) keptDrawings.delete(keptDrawings.keys().next().value); }
+        if (!c) { c = { canvas: document.createElement("canvas"), ver: 0 }; keptDrawings.set(o.id, c); if (keptDrawings.size > 2) dropKept(keptDrawings.keys().next().value); }
         const W = Math.max(1, Math.ceil(r.w * k)), H = Math.max(1, Math.ceil(r.h * k));
         c.canvas.width = W; c.canvas.height = H;
         const d = c.canvas.getContext("2d");
