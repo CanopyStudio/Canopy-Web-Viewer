@@ -11,7 +11,7 @@ import { themes, sizes } from "./look.js";
 import { toned } from "./tone.js";
 import { VERSION } from "./version.js";
 import * as off from "./offline.js";
-import { addPicture, closePicture, folded, keepOnPhone, newProject, nextPicture, picture, showFiles, showPicture } from "./files.js";
+import { addPicture, changesMenu, closePicture, folded, keepOnPhone, newProject, nextPicture, picture, showFiles, showPicture } from "./files.js";
 import { drag, drawLinkThumbs, finishTyping, growArea, keepInView, keyDown, listMenu, masonry, newList, oneColumn, refreshList, setOneColumn, showList, showLists, touchEntries } from "./lists.js";
 import { closePop, drawBar, drawMode, drawPress, drawSelection, dropperAt, endDrawing, fillAt, paintSel, pen, penAway, popOf, selecting, selectionWith, sessionInk, shapeColors } from "./drawing.js";
 import { catchUp, changed, forgetSaves, keepNow, keepPhoto, pastSave, photosReady, save, saveCopy, saveTimer, setState, state, stateWhere, stateWhy, statusHtml } from "./saving.js";
@@ -738,7 +738,7 @@ function wireShapes(m)
     });
 }
 // A menu below a button (put on the page itself, over everything: its button tapped again, put away), or null then.
-function dropMenu(btn, html)
+export function dropMenu(btn, html)
 {
     if (!btn) return null;
     const was = document.querySelector(".addmenu");
@@ -1320,6 +1320,7 @@ export function act(what, value, ev, el)
             break;
         }
         case "keep": keepOnPhone(value); break;
+        case "fchanges": changesMenu(el, value); break;
         case "photo": photoMenu(); break;
         case "draw": if (shaping) shaping = null; drawMode(); break;
         case "shapes": shapeMenu(el); break;

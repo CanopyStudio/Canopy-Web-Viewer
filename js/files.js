@@ -5,7 +5,7 @@ import * as cnpy from "./cnpy.js";
 import * as dbx from "./dropbox.js";
 import * as off from "./offline.js";
 import { VERSION } from "./version.js";
-import { addPhoto, app, awake, bar, calm, closeViewers, element, failed, feel, fileName, focusBoard, folder, footColor, full, furthest, go, holdScroll, icon, iconButton, letScroll, openPath, problem, project, remember, remembered, setFull, setProblem, setTab, sheetUp, show, stillDown, text, toast, wire } from "./app.js";
+import { addPhoto, app, dropMenu, awake, bar, calm, closeViewers, element, failed, feel, fileName, focusBoard, folder, footColor, full, furthest, go, holdScroll, icon, iconButton, letScroll, openPath, problem, project, remember, remembered, setFull, setProblem, setTab, sheetUp, show, stillDown, text, toast, wire } from "./app.js";
 
 export async function showFiles()
 {
@@ -28,6 +28,7 @@ export async function showFiles()
     const pins = remembered("canopy.pinned", []);
     const recent = remembered("canopy.recent", []).filter(r => !pins.includes(r));
     const phone = (await off.all()).sort((a, b) => fileName(a.path).localeCompare(fileName(b.path))), waits = await off.waiting();
+    waitingNow = waits;
     const at = history.state && history.state.at || 0;
     const arrows = iconButton("back", "back", "Back", "", at === 0 && folder === "") + iconButton("ahead", "forward", "Forward", "", at >= furthest());
     const inFolder = r => r.split("/").slice(-2, -1)[0] || "Dropbox";
@@ -292,12 +293,14 @@ function heading(key, words)
 }
 // A row as the desktop app's project lists have them: the name, a faded note at the right (when it was saved, or where it
 // is); a folder marked as one, and goes on into it; a project can be pinned.
+let waitingNow = new Set();   // (the projects with changes on this phone not yet saved: a menu by each, for them)
 function item(kind, name, note, does, value)
 {
     const pinned = kind === "file" && remembered("canopy.pinned", []).includes(value), kept = kind === "file" && off.has(value);
     return '<div class="item-row"><button class="item' + (kind === "folder" ? " folder" : "") + '" data-do="' + does + '" data-value="' + text(value) + '">'
         + (kind === "folder" ? icon("folder", 18) : kind === "picture" ? '<img class="thumb" alt="">' : "") + '<span class="name">' + text(name) + "</span>"
         + (note ? '<span class="note">' + text(note) + "</span>" : "") + (kind === "folder" ? icon("chevron", 16) : "") + "</button>"
+        + (kind === "file" && waitingNow.has(value) ? '<button class="pin" data-do="fchanges" data-value="' + text(value) + '" aria-label="Changes on this phone" title="Changes on this phone">' + icon("more", 16) + "</button>" : "")
         + (kind === "file" ? '<button class="pin keep' + (kept ? " on" : "") + '" data-do="keep" data-value="' + text(value) + '" aria-label="' + (kept ? "Remove from this phone" : "Keep on this phone") + '" title="' + (kept ? "Remove from this phone" : "Keep on this phone") + '">' + icon("download", 16) + "</button>"
             + '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to top") + '" title="' + (pinned ? "Unpin" : "Pin to top") + '">' + icon("pin", 16) + "</button>" : "") + "</div>";
 }
@@ -333,4 +336,33 @@ export async function newProject()
     try { await dbx.create(path, await cnpy.blankFile()); }
     catch (e) { setProblem(e.message); return showFiles(); }
     openPath(path);
+}
+
+// The changes on this phone not yet saved to a project: sent on as a file (to be looked into), or let go, for a project
+// they keep from opening or saving.
+export function changesMenu(btn, path)
+{
+    const m = dropMenu(btn, '<button data-c="send">' + icon("download", 18) + "<span>Send changes as a file</span></button>"
+        + '<button data-c="drop">' + icon("trash", 18) + "<span>Discard changes</span></button>");
+    if (!m) return;
+    m.addEventListener("click", async e =>
+    {
+        const b = e.target.closest("button[data-c]");
+        if (!b) return;
+        if (b.dataset.c === "send")
+        {
+            m.gone();
+            const list = (await off.steps(path)) || [];
+            const file = new File([JSON.stringify({ path, version: VERSION, steps: list })], fileName(path).replace(/\.cnpy$/i, "") + " changes.json", { type: "application/json" });
+            try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; } } catch (x) { if (x && x.name === "AbortError") return; }
+            const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+            return;
+        }
+        if (!b.dataset.sure) { b.dataset.sure = "1"; b.querySelector("span").textContent = "Tap again to discard"; return; }
+        m.gone();
+        await off.keepSteps(path, []);
+        toast("Changes discarded");
+        showFiles();
+    });
 }

@@ -812,6 +812,7 @@ let sketchCanvas = null;   // (one, used again: each drawing drawn on it, then l
 const keptDrawings = new Map();   // by drawing: { canvas, k (its pixels to a canvas unit), x, y, w, h, n (strokes on it), last, merged, loaded }
 // One let go: its canvases emptied at once (a phone's browser counts a canvas until it is collected, and allows only so
 // much in all).
+export function letGoKept() { for (const id of [...keptDrawings.keys()]) dropKept(id); }   // (before a save paints: room for it)
 function dropKept(id)
 {
     const c = keptDrawings.get(id);

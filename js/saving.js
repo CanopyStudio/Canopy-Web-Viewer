@@ -16,6 +16,7 @@ import { pen } from "./drawing.js";
 async function paintSketches(view, doc)
 {
     const out = [], D = cnpy.DENSITY;
+    render.letGoKept();
     for (const k of view.sketches || [])
     {
         if (k.base) continue;   // (painted with the drawing it is on, below)
@@ -39,32 +40,41 @@ async function paintTiles(frame, draw)
 {
     const T = cnpy.TILE, tiles = new Map();
     const c0 = Math.floor(frame.x / T), r0 = Math.floor(frame.y / T), c1 = Math.floor((frame.x + frame.w - 1) / T), r1 = Math.floor((frame.y + frame.h - 1) / T);
-    const whole = (c1 - c0 + 1) * (r1 - r0 + 1) * T * T <= 16e6;   // (a phone's browser makes no bigger canvas: Safari's limit)
+    const count = (c1 - c0 + 1) * (r1 - r0 + 1);
+    // (past this, something has gone wrong with what it reaches: said so, not gone over tile by tile for minutes)
+    if (!(count <= 4000)) throw new Error("A drawing reaches too far to save (" + (c1 - c0 + 1) + " by " + (r1 - r0 + 1) + " tiles, from " + Math.round(frame.x) + ", " + Math.round(frame.y) + ")");
+    const whole = count * T * T <= 16e6;   // (a phone's browser makes no bigger canvas: Safari's limit)
     let all = null, ag = null;
-    if (whole)
+    const cv = document.createElement("canvas");   // (one tile's, used again for each: a phone's browser allows only so much canvas)
+    try
     {
-        all = document.createElement("canvas");
-        all.width = (c1 - c0 + 1) * T; all.height = (r1 - r0 + 1) * T;
-        ag = all.getContext("2d", { willReadFrequently: true });
-        draw(ag, c0 * T, r0 * T);
-    }
-    for (let r = r0; r <= r1; r++)
-        for (let c = c0; c <= c1; c++)
+        if (whole)
         {
-            const cv = document.createElement("canvas");
-            cv.width = cv.height = T;
-            const g = cv.getContext("2d", { willReadFrequently: true });
-            if (whole) g.drawImage(all, (c - c0) * T, (r - r0) * T, T, T, 0, 0, T, T);
-            else draw(g, c * T, r * T);
-            const px = g.getImageData(0, 0, T, T).data;
-            let any = false;
-            for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
-            if (!any) { cv.width = cv.height = 0; continue; }
-            const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
-            cv.width = cv.height = 0;   // (let go at once: a phone's browser allows only so much canvas)
-            tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
+            all = document.createElement("canvas");
+            all.width = (c1 - c0 + 1) * T; all.height = (r1 - r0 + 1) * T;
+            ag = all.getContext("2d", { willReadFrequently: true });
+            draw(ag, c0 * T, r0 * T);
         }
-    if (all) all.width = all.height = 0;
+        cv.width = cv.height = T;
+        const g = cv.getContext("2d", { willReadFrequently: true });
+        let n = 0;
+        for (let r = r0; r <= r1; r++)
+            for (let c = c0; c <= c1; c++)
+            {
+                if (++n % 64 === 0) await new Promise(ok => setTimeout(ok, 0));   // (the page let breathe now and then)
+                g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.clearRect(0, 0, T, T);
+                if (whole) g.drawImage(all, (c - c0) * T, (r - r0) * T, T, T, 0, 0, T, T);
+                else { g.save(); draw(g, c * T, r * T); g.restore(); }
+                const px = g.getImageData(0, 0, T, T).data;
+                let any = false;
+                for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
+                if (!any) continue;
+                const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
+                if (!blob) throw new Error("This phone ran short of memory painting a drawing");
+                tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
+            }
+    }
+    finally { cv.width = cv.height = 0; if (all) all.width = all.height = 0; }
     return tiles;
 }
 // A saved drawing painted again: its tiles read back, then its strokes since it was saved, then any drawings merged
