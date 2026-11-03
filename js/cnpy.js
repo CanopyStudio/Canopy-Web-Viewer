@@ -4,9 +4,9 @@
 // exactly as it was read, so the desktop app merges the change in as one person's edit.
 
 const ROWS_SINCE = 3;   // the layers.txt version from which entries have their own ids (older files open to read only)
-const SEP = "\u001f";
+const SEP = "\u001f";   // between the names of the groups an object is in
 export const DENSITY = 2;   // a drawing's pixels to a canvas unit, as Board makes new ones (DrawingLayer.Density)
-export const TILE = 256;    // a drawing's tiles, as Board's (Raster.T)   // between the names of the groups an object is in
+export const TILE = 256;    // a drawing's tiles, as Board's (Raster.T)
 
 // Board's escaping of a field: backslash, new line and the bar that separates fields.
 export function escape(s) { return (s || "").replace(/\\/g, "\\\\").replace(/\r/g, "").replace(/\n/g, "\\n").replace(/\|/g, "\\p"); }
@@ -135,7 +135,6 @@ export function parse(text)
         if (key === "CanopyBoard" || key === "CanopyCreator") { const v = parseInt(rest, 10); if (v > doc.version) doc.version = v; }
         else if (key === "canvas") doc.canvas = rest.trim();
         else if (key === "palette") doc.palette = rest.split(" ").filter(c => /^#[0-9A-Fa-f]{6,8}$/.test(c));
-        else if (key === "recent") doc.recent = rest.split(" ").filter(c => /^#[0-9A-Fa-f]{6,8}$/.test(c));   // (the colors last used: the brush's to pick from)
         else if (key === "boards") { doc.boardsLine = i; const f = rest.split(" "); doc.boardColor = col(f[0]); doc.boardLook = parseInt(f[1], 10) || 0; }
         else if (key === "folders") rest.split(" ").filter(Boolean).forEach(x => doc.folders.add(x));
         else if (key === "hides") rest.split(" ").filter(Boolean).forEach(x => doc.hides.add(x));
@@ -434,21 +433,23 @@ export async function save(doc, view, pictures, drawn)
 // ---- changes ----
 
 // What has been done here, kept as steps so they can be done again on top of a newer copy of the file (someone saved
-// in the meantime): their project as it now is, ours on top. The lists (with new ones), and the photos added.
-export function apply(doc, steps)
+// in the meantime): their project as it now is, ours on top. The lists (with new ones), and the photos added. "from":
+// what an earlier apply of the same file left (the steps before these), carried on from (it is left as it was).
+export function apply(doc, steps, from)
 {
-    const lists = doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) }));
-    const photos = [], deleted = new Set(), removed = new Set(), moved = new Map(), boards = [], locks = new Map(), unlocked = new Set();
-    const relocked = new Set(), goneBoards = new Set(), restored = [];
-    // The hierarchy's: objects shown or hidden, renamed, put above another (and into its layer), layers shown or hidden,
-    // and drawings merged down (each into the one below, painted together as it is saved).
-    const fills = new Map();
-    const hides = new Map(), names = new Map(), zorder = [], layerHides = new Map(), merges = [], newLayers = [], droppedLayers = new Set();
-    const unsaved = new Map();   // drawings shown as they were before a save, by id: their pixels then ("snap"), a save's strokes undone past it
-    const sketches = [];   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
-    let order = null;   // the lists' order, once set here
-    const items = new Map(doc.items.map(o => [o.id, o]));
-    const ids = new Set(doc.items.map(o => o.id));   // (already in the file: a save that went through, its answer lost)
+    const v = from ? carried(from) : {
+        lists: doc.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) })),
+        photos: [], deleted: new Set(), removed: new Set(), moved: new Map(), boards: [], locks: new Map(), unlocked: new Set(),
+        relocked: new Set(), goneBoards: new Set(), restored: [],
+        // The hierarchy's: objects shown or hidden, renamed, put above another (and into its layer), layers shown or
+        // hidden, and drawings merged down (each into the one below, painted together as it is saved).
+        fills: new Map(), hides: new Map(), names: new Map(), zorder: [], layerHides: new Map(), merges: [], newLayers: [], droppedLayers: new Set(),
+        unsaved: new Map(),   // drawings shown as they were before a save, by id: their pixels then ("snap"), a save's strokes undone past it
+        sketches: [],   // drawings made here: { id, name, layer, author, strokes }, each a new drawing layer once saved
+        order: null     // the lists' order, once set here
+    };
+    const { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, fills, hides, names, zorder, layerHides, merges, newLayers, droppedLayers, unsaved, sketches } = v;
+    const items = doc._byId || (doc._byId = new Map(doc.items.map(o => [o.id, o]))), ids = items;   // (ids: already in the file: a save that went through, its answer lost)
     // Where an entry goes: after the one named, at the top for none (null), at the end if that one has gone.
     const place = (rows, after) => { if (after === null) return 0; const k = rows.findIndex(r => r.id === after); return k < 0 ? rows.length : k + 1; };
     for (const s of steps)
@@ -488,7 +489,7 @@ export function apply(doc, steps)
             for (const g of s.relock || []) { if (unlocked.has(g)) unlocked.delete(g); else relocked.add(g); }
             continue;
         }
-        if (s.t === "order") { order = s.ids.slice(); continue; }
+        if (s.t === "order") { v.order = s.ids.slice(); continue; }
         if (s.t === "hide") { for (const id of s.ids) hides.set(id, s.on); continue; }
         if (s.t === "rename") { names.set(s.id, s.name); continue; }
         if (s.t === "fill")
@@ -507,12 +508,12 @@ export function apply(doc, steps)
         if (s.t === "hidelayer") { layerHides.set(s.id, s.on); continue; }
         if (s.t === "newlayer") { if (!doc.folders.has(s.id) && !newLayers.some(l => l.id === s.id)) newLayers.push({ id: s.id, name: s.name, below: s.below || null }); continue; }
         if (s.t === "dellayer") { const k = newLayers.findIndex(l => l.id === s.id); if (k >= 0) newLayers.splice(k, 1); continue; }
-        // A layer deleted, with what is in it ("ids", as it was then): one made here simply gone, one of the file's
-        // taken out of it (its "folders" and "empty" lines).
         // A drawing as it was before a save (undone past it, its strokes from then put back as steps of their own), or
         // as it is in the file again.
         if (s.t === "unsave") { unsaved.set(s.id, s.snap); continue; }
         if (s.t === "ununsave") { unsaved.delete(s.id); continue; }
+        // A layer deleted, with what is in it ("ids", as it was then): one made here simply gone, one of the file's
+        // taken out of it (its "folders" and "empty" lines).
         if (s.t === "droplayer" || s.t === "undroplayer")
         {
             if (s.t === "undroplayer") { droppedLayers.delete(s.id); continue; }
@@ -559,9 +560,31 @@ export function apply(doc, steps)
         else if (s.t === "del" && at >= 0) l.rows.splice(at, 1);
         else if (s.t === "move" && at >= 0) { const [r] = l.rows.splice(at, 1); l.rows.splice(place(l.rows, s.after), 0, r); }
     }
-    // (a drawing made in a save, undone past it with none of its strokes back: not there)
-    for (const [id, snap] of unsaved) if (snap.isNew && !sketches.some(k => k.base === id && k.strokes.length)) removed.add(id);
-    return { lists, photos, deleted, removed, moved, boards, locks, unlocked, relocked, goneBoards, restored, order, sketches, hides, names, fills, zorder, layerHides, merges, newLayers, droppedLayers, unsaved };
+    // (a drawing made in a save, undone past it with none of its strokes back: not there; kept apart in "gone", to be
+    // taken back off if more steps are carried on from here)
+    v.gone = [];
+    for (const [id, snap] of unsaved) if (snap.isNew && !removed.has(id) && !sketches.some(k => k.base === id && k.strokes.length)) { removed.add(id); v.gone.push(id); }
+    return v;
+}
+// A copy of what an apply left, to carry on from: whatever the steps change in place copied (the lists and their
+// entries, the photos, what was brought back, the drawings' strokes), the rest shared.
+function carried(v)
+{
+    const removed = new Set(v.removed);
+    for (const id of v.gone) removed.delete(id);
+    const sketches = v.sketches.map(k =>
+    {
+        const c = { ...k, strokes: k.strokes.slice() };
+        if (k.sids) Object.defineProperty(c, "sids", { value: new Set(k.sids), writable: true });
+        return c;
+    });
+    return {
+        lists: v.lists.map(l => ({ ...l, rows: l.rows.map(r => ({ ...r })) })), photos: v.photos.map(p => ({ ...p })), deleted: new Set(v.deleted), removed,
+        moved: new Map(v.moved), boards: v.boards.slice(), locks: new Map(v.locks), unlocked: new Set(v.unlocked), relocked: new Set(v.relocked),
+        goneBoards: new Set(v.goneBoards), restored: v.restored.map(r => ({ ...r })), fills: new Map(v.fills), hides: new Map(v.hides), names: new Map(v.names),
+        zorder: v.zorder.slice(), layerHides: new Map(v.layerHides), merges: v.merges.slice(), newLayers: v.newLayers.slice(), droppedLayers: new Set(v.droppedLayers),
+        unsaved: new Map(v.unsaved), sketches, order: v.order
+    };
 }
 
 // ---- the hierarchy's changes ----

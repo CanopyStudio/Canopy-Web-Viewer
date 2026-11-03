@@ -65,6 +65,7 @@ export class Viewer
         if (this.painter) this.painter.dispose();
         this.painter = null;
         if (this.glCanvas) this.glCanvas.remove();
+        if (this.overCanvas) this.overCanvas.remove();
         this.canvas.remove();
         for (const c of [this.wetUnder, this.wetOver, this.overCanvas]) if (c) c.width = c.height = 0;
         this.wet = null;
@@ -90,7 +91,7 @@ export class Viewer
             if (on) this.paintFrame(sc, on, fast, !whole);
             else
             {
-                if (this.glCanvas && this.glCanvas.style.display !== "none") { this.glCanvas.style.display = "none"; this.painter.forget(); }
+                if (this.glCanvas && this.glCanvas.style.display !== "none") { this.glCanvas.style.display = "none"; this.overCanvas.style.display = "none"; this.painter.forget(); }
                 if (!this.wetDraw(sc)) render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast });
             }
             render.stats.draws.push({ at: t0, ms: performance.now() - t0 }); if (render.stats.draws.length > 60) render.stats.draws.shift();
@@ -124,9 +125,9 @@ export class Viewer
         if (at < 0) return null;
         const o = sc.items[at];
         if ((o.kind !== "sketch" && o.kind !== "paint") || o.angle || o.shear || o.flipX || o.flipY || (o.blend && o.blend !== "normal") || o.merged || render.hidden(sc, o)) return null;
-        if (o.group && sc.masks.size) { const ids = o.group.split("/"); for (let k = 1; k <= ids.length; k++) if (sc.masks.has(ids.slice(0, k).join("/"))) return null; }   // (clipped by a mask)
+        if (o.group && sc.masks.size && render.groupsOf(o.group).paths.some(g => sc.masks.has(g))) return null;   // (clipped by a mask)
         if ((o.strokes || []).some(st => st.kind === "move" || st.kind === "clear")) return null;   // (selections moved or cleared: drawn here)
-        if (sc.items.slice(at + 1).some(x => x.blend && x.blend !== "normal" && !render.hidden(sc, x))) return null;   // (something over it blending with it: drawn here, together)
+        for (let i = at + 1; i < sc.items.length; i++) { const x = sc.items[i]; if (x.blend && x.blend !== "normal" && !render.hidden(sc, x)) return null; }   // (something over it blending with it: drawn here, together)
         if (!this.painter)
         {
             const c = document.createElement("canvas");
@@ -136,12 +137,18 @@ export class Viewer
             this.painter = gpu.painter(c);
             if (!this.painter) { c.remove(); this.glOff = true; return null; }
             this.glCanvas = c;
+            // What is over the drawing, laid over the chip's canvas by the page (not taken onto the chip each frame,
+            // a screen's worth of pixels every time the view moves)
+            const oc = this.overCanvas = document.createElement("canvas");
+            oc.className = "viewer paint";
+            Object.assign(oc.style, { position: "absolute", left: "0", top: "0", pointerEvents: "none", display: "none" });
+            this.host.appendChild(oc);
         }
         if (this.painter.failed)
         {
             // (the chip took its pictures back, as a phone may when the app is put away: a fresh start next time,
             // drawn here meanwhile; given up on only if it keeps happening)
-            this.painter.dispose(); this.painter = null; this.glCanvas.remove(); this.glCanvas = null;
+            this.painter.dispose(); this.painter = null; this.glCanvas.remove(); this.glCanvas = null; this.overCanvas.remove(); this.overCanvas = null;
             this.glLost = (this.glLost || 0) + 1;
             if (this.glLost > 3) this.glOff = true;
             return null;
@@ -149,7 +156,7 @@ export class Viewer
         return { at, o };
     }
     // What is under the drawing drawn here (when more than the stroke under way changed), what is over it (and what is
-    // picked) drawn for the chip to lay over it, and the drawing itself shown from the chip.
+    // picked) drawn on the canvas laid over the chip's, and the drawing itself shown from the chip.
     paintFrame(sc, on, fast, wetOnly)
     {
         if (!wetOnly)
@@ -157,19 +164,19 @@ export class Viewer
             // (the boards' names drawn under it here, not over: else what is over it would be drawn and taken to the
             // chip each time the view moves, in nearly every project)
             render.draw(this.ctx, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast, part: { from: 0, to: on.at, under: true, names: true } });
-            const over = sc.items.slice(on.at + 1).some(x => !render.hidden(sc, x)), marks = this.overlay && this.overlayNeeded && this.overlayNeeded();
+            let over = false;
+            for (let i = on.at + 1; i < sc.items.length && !over; i++) over = !render.hidden(sc, sc.items[i]);
+            const marks = this.overlay && this.overlayNeeded && this.overlayNeeded(), oc = this.overCanvas;
             if (over || marks)
             {
-                if (!this.overCanvas) this.overCanvas = document.createElement("canvas");
-                const oc = this.overCanvas;
                 if (oc.width !== this.canvas.width || oc.height !== this.canvas.height) { oc.width = this.canvas.width; oc.height = this.canvas.height; }
+                Object.assign(oc.style, { display: "", width: this.w + "px", height: this.h + "px" });
                 const g = oc.getContext("2d");
                 g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.clearRect(0, 0, oc.width, oc.height);
                 if (over) render.draw(g, sc, this.cam, this.w, this.h, this.dpr, this.get, () => this.redraw(), { fast, part: { from: on.at + 1, to: sc.items.length } });
                 if (marks) { g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; this.overlay(g); }
-                this.painter.over(oc);
             }
-            else this.painter.over(null);
+            else oc.style.display = "none";
         }
         Object.assign(this.glCanvas.style, { display: "", width: this.w + "px", height: this.h + "px" });
         const ctx = this.ctx;

@@ -388,20 +388,29 @@ export function scene(doc, view)
     for (const p of view.photos) items.push({ kind: "image", locked: !!p.locked, id: p.id, file: p.file, x: p.x, y: p.y, w: p.w, h: p.h, cx: 0, cy: 0, cw: p.pw, ch: p.ph, opacity: 1, blend: "normal", angle: 0, shear: 0, group: p.layer ? p.layer.id : null, name: p.name });
     const masks = new Map();   // a clipped group's path → its mask (the topmost of it, marked as one)
     const top = new Map();
-    for (const o of items) if (o.group) { const ids = o.group.split("/"); for (let k = 1; k <= ids.length; k++) top.set(ids.slice(0, k).join("/"), o); }
+    for (const o of items) if (o.group) for (const path of groupsOf(o.group).paths) top.set(path, o);
     for (const [g, o] of top) if (o.clip && o.group === g) masks.set(g, o);
     return { doc, items, masks, hides: hiddenLayers(doc, view), boards: doc.boards.filter(b => !view.goneBoards.has(b.id)).concat(view.boards) };
 }
 
+// The groups an object is in, by their ids (outermost first), and the paths to each ("a", "a/b", ...): each group's
+// worked out once, not again for every object at every frame.
+const groupings = new Map();
+export function groupsOf(group)
+{
+    let g = groupings.get(group);
+    if (!g) { const ids = group.split("/"); g = { ids, paths: ids.map((x, k) => ids.slice(0, k + 1).join("/")) }; groupings.set(group, g); }
+    return g;
+}
 // Hidden: itself, or a group or layer it is in ("sc": the scene, with the layers as hidden here; else the file's).
 export function hidden(sc, o)
 {
     if (o.hidden) return true;
     const hides = sc.hides || sc.doc.hides;
     if (!o.group || hides.size === 0) return false;
-    return o.group.split("/").some(id => hides.has(id));
+    return groupsOf(o.group).ids.some(id => hides.has(id));
 }
-export function fade(doc, o) { let a = o.opacity === undefined ? 1 : o.opacity; if (o.group && doc.fades.size) for (const id of o.group.split("/")) if (doc.fades.has(id)) a *= doc.fades.get(id); return a; }
+export function fade(doc, o) { let a = o.opacity === undefined ? 1 : o.opacity; if (o.group && doc.fades.size) for (const id of groupsOf(o.group).ids) if (doc.fades.has(id)) a *= doc.fades.get(id); return a; }
 
 // Where an object is (its own box, before any turn), and its box on the canvas with any turn.
 export function box(o, ctx)
@@ -482,8 +491,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         // Clipped by the mask of any group it is in.
         if (o.group && sc.masks.size)
         {
-            const ids = o.group.split("/");
-            for (let k = 1; k <= ids.length; k++) { const m = sc.masks.get(ids.slice(0, k).join("/")); if (m && m !== o) { const p = outline(m); if (p) ctx.clip(p); } }
+            for (const path of groupsOf(o.group).paths) { const m = sc.masks.get(path); if (m && m !== o) { const p = outline(m); if (p) ctx.clip(p); } }
         }
         try { drawOne(ctx, o, doc, s, get, redraw, opts.wet); } catch (e) { }
         ctx.restore();
@@ -504,16 +512,29 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
 export function sketchItem(k)
 {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    const take = (x, y, r) => { x0 = Math.min(x0, x - r); y0 = Math.min(y0, y - r); x1 = Math.max(x1, x + r); y1 = Math.max(y1, y + r); };
     for (const st of k.strokes)
     {
-        if (st.kind === "fill") { take(st.x, st.y, 0); take(st.x + st.w, st.y + st.h, 0); continue; }
-        if (st.kind === "move") { for (let i = 0; i < st.pts.length; i += 2) { take(st.pts[i], st.pts[i + 1], 1); take(st.pts[i] + st.dx, st.pts[i + 1] + st.dy, 1); } continue; }
-        if (st.kind === "clear") continue;   // (rubs out only)
-        for (let i = 0; i < st.pts.length; i += 3) take(st.pts[i], st.pts[i + 1], st.size / 2 + 1);
+        const r = reachOfStroke(st);
+        if (r.x0 < x0) x0 = r.x0; if (r.y0 < y0) y0 = r.y0; if (r.x1 > x1) x1 = r.x1; if (r.y1 > y1) y1 = r.y1;
     }
     if (x0 === Infinity) { x0 = y0 = x1 = y1 = 0; }
     return { kind: "sketch", id: k.id, name: k.name, strokes: k.strokes, x: x0, y: y0, w: x1 - x0, h: y1 - y0, group: k.layer ? k.layer.id : null, opacity: 1, blend: "normal", angle: 0, shear: 0 };
+}
+// What one stroke reaches (its corners, x0 to x1 and y0 to y1), kept with it: worked out again only once it has changed
+// (its points still coming, a selection moved further), so a drawing's reach isn't every point of it gone over again.
+const reaches = new WeakMap();
+function reachOfStroke(st)
+{
+    const n = st.pts ? st.pts.length : 0, got = reaches.get(st);
+    if (got && got.n === n && got.dx === st.dx && got.dy === st.dy && got.size === st.size) return got;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const take = (x, y, r) => { x0 = Math.min(x0, x - r); y0 = Math.min(y0, y - r); x1 = Math.max(x1, x + r); y1 = Math.max(y1, y + r); };
+    if (st.kind === "fill") { take(st.x, st.y, 0); take(st.x + st.w, st.y + st.h, 0); }
+    else if (st.kind === "move") { for (let i = 0; i < n; i += 2) { take(st.pts[i], st.pts[i + 1], 1); take(st.pts[i] + st.dx, st.pts[i + 1] + st.dy, 1); } }
+    else if (st.kind !== "clear") for (let i = 0; i < n; i += 3) take(st.pts[i], st.pts[i + 1], st.size / 2 + 1);   // (a clear rubs out only)
+    const r = { n, dx: st.dx, dy: st.dy, size: st.size, x0, y0, x1, y1 };
+    reaches.set(st, r);
+    return r;
 }
 // Strokes drawn onto a canvas set to canvas units: Ink's line as wide as it is pressed, the Flat's its roughened tip
 // stamped along, an eraser rubbing out (on the drawing's own canvas: only what is drawn there). A
@@ -526,7 +547,7 @@ export function drawStrokes(g, strokes)
         if (st.kind === "fill" || st.kind === "move" || st.kind === "clear") { drawEdit(g, st); continue; }
         const n = st.pts.length / 3;
         if (n === 0) continue;
-        const alpha = st.kind === "marker" ? 0.55 : st.opacity === undefined ? 1 : st.opacity;   // (a marker: drawn here before 0.7.17)
+        const alpha = st.opacity === undefined ? 1 : st.opacity;
         const op = st.kind === "erase" ? "destination-out" : "source-over";
         if (alpha >= 1)
         {
@@ -564,21 +585,11 @@ let alone = null;   // (a stroke drawn on its own: one canvas, used again)
 // One stroke's paint, at full strength, onto "g" (set to canvas units).
 function strokeInto(g, st)
 {
-    const p = st.pts, n = p.length / 3, x = i => p[i * 3], y = i => p[i * 3 + 1];
+    const p = st.pts;
     g.lineCap = "round"; g.lineJoin = "round";
     g.strokeStyle = g.fillStyle = st.kind === "erase" ? "#000" : st.color;
     if (st.kind === "flat") { flatInto(g, st); return; }
-    if (st.kind === "marker")
-    {
-        g.lineWidth = st.size;
-        g.beginPath(); g.moveTo(p[0], p[1]);
-        if (n === 1) g.lineTo(p[0] + 0.01, p[1]);
-        for (let i = 1; i < n; i++) g.quadraticCurveTo(x(i - 1), y(i - 1), (x(i - 1) + x(i)) / 2, (y(i - 1) + y(i)) / 2);
-        if (n > 1) g.lineTo(x(n - 1), y(n - 1));
-        g.stroke();
-        return;
-    }
-    inkPieces(g, st, p, 1, n);
+    inkPieces(g, st, p, 1, p.length / 3);
 }
 // Ink: piece by piece, each as wide as the pressure along it (so it swells and thins along the way), and each a curve
 // from the middle of one gap to the middle of the next, bending at the point between (no corners); the last on to the
@@ -1081,7 +1092,7 @@ function mixA(a, b, t)   // two "#AARRGGBB" colors mixed
     return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("");
 }
 
-function stroke(ctx, o, path, s)
+function stroke(ctx, o, path)
 {
     if (!o.stroke || !(o.width > 0)) return;
     ctx.strokeStyle = rgba(o.stroke);
@@ -1100,7 +1111,6 @@ function stroke(ctx, o, path, s)
     }
     else if (path) ctx.stroke(path); else ctx.stroke();
     ctx.setLineDash([]);
-    void s;
 }
 
 function drawOne(ctx, o, doc, s, get, redraw, wet)
@@ -1164,7 +1174,7 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
             flip(ctx, o, b);
             const f = paint(ctx, o, b);
             if (f) { ctx.fillStyle = f; ctx.fill(p); }
-            stroke(ctx, o, p, s);
+            stroke(ctx, o, p);
             return;
         }
         case "line": case "arrow":
@@ -1172,7 +1182,7 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
             const p = new Path2D();
             p.moveTo(o.ax, o.ay); p.lineTo(o.bx, o.by);
             const c = { ...o, stroke: o.stroke || o.fill, place: 0 };
-            stroke(ctx, c, p, s);
+            stroke(ctx, c, p);
             if (o.kind === "arrow" || o.arrowhead)
             {
                 // Its head: a filled point at the end.
@@ -1192,7 +1202,7 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
             const p = pathOf(o);
             const f = paint(ctx, o, b);
             if (f) { ctx.fillStyle = f; ctx.fill(p); }
-            stroke(ctx, o, p, s);
+            stroke(ctx, o, p);
             return;
         }
         case "type": drawType(ctx, o, b, redraw); return;
@@ -1256,8 +1266,11 @@ function measureCtx(ctx) { if (ctx) return ctx; if (!measurer) measurer = docume
 const BAND = 10;   // a list's color, as a band along its card's top edge
 export function listLayout(o, ctx)
 {
+    // (laid out once for each list as the steps leave it, which is never changed after: the same one again, at once;
+    // a copy of it, as more steps are done, checked by what it shows)
+    if (o._layout && o._layout.of === o && o._layout.rows === o.rows) return o._layout;
     const key = o.w + "|" + o.name + "|" + o.showDone + "|" + o.rows.map(r => r.kind + r.done + r.text + (r.link ? 1 : 0)).join("\u0001");
-    if (o._layout && o._layout.key === key) return o._layout;
+    if (o._layout && o._layout.key === key) return o._layout = { ...o._layout, of: o, rows: o.rows };
     const c = measureCtx(ctx);
     const w = o.w / o.scale;
     c.save();
@@ -1282,7 +1295,7 @@ export function listLayout(o, ctx)
         y += h + 10;
     }
     c.restore();
-    o._layout = { key, title, entries, h: y + 10 };
+    o._layout = { key, title, entries, h: y + 10, of: o, rows: o.rows };
     return o._layout;
 }
 function plainWords(t) { return (t || "").replace(/\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*/g, "$1").replace(/\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*/g, "$1"); }

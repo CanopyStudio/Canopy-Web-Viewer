@@ -1,6 +1,6 @@
 // Painting on the graphics chip (WebGL 2): while drawing, the drawing being drawn on is shown from a picture of it
 // kept on the chip, over the rest of the canvas (drawn as ever, by render.js, on the canvas under this one), with what
-// is above it laid over it. A stroke under way is added to a little at a time, on the chip, so it keeps up with the
+// is above it laid over it (on a canvas of the page's, over this one). A stroke under way is added to a little at a time, on the chip, so it keeps up with the
 // finger however much the drawing holds; a stroke finished is painted into the drawing's picture exactly as render.js
 // would paint it. Its strokes are drawn as render.js draws them (Ink's pieces, the Flat's tip stamped along, the
 // eraser, a fill's picture), so what shows here is what is saved. Null when the phone has no WebGL 2.
@@ -165,7 +165,7 @@ export function painter(canvas)
     const drop = t => { if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); } };
     const into = (t, w, h) => { gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fbo : null); gl.viewport(0, 0, w, h); };
     const clear = () => { gl.disable(gl.SCISSOR_TEST); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); };
-    // A picture (a tile, a fill, what is over the drawing) taken onto the chip: its top row at the top (as the shapes
+    // A picture (a tile, a fill) taken onto the chip: its top row at the top (as the shapes
     // are drawn), its colors premultiplied.
     const upload = (src, tex) =>
     {
@@ -232,13 +232,16 @@ export function painter(canvas)
     }
     // Shapes drawn into what is bound, as "map" places canvas units, each kept as strong as the strongest over it (so
     // a stroke is one even layer of paint, as render.js draws one).
+    let floats = new Float32Array(6 * 1024);   // (the shapes' numbers, sent from one array used again: none made each frame)
     function drawShapes(list, color, map, w, h, stamps)
     {
         if (!list.length) return;
         gl.useProgram(shape.pr);
         gl.bindVertexArray(vaoShape);
         gl.bindBuffer(gl.ARRAY_BUFFER, shapes);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(list), gl.STREAM_DRAW);
+        if (floats.length < list.length) floats = new Float32Array(Math.max(list.length, floats.length * 2));
+        floats.set(list);
+        gl.bufferData(gl.ARRAY_BUFFER, floats, gl.STREAM_DRAW, 0, list.length);
         gl.uniform4f(shape.u.map, map[0], map[1], map[2], map[3]);
         gl.uniform2f(shape.u.size, w, h);
         const [r, g, b] = rgbOf(color);
@@ -309,7 +312,7 @@ export function painter(canvas)
         else inkShapes(st, st.pts, 1, st.pts.length / 3, 1 / k, list);
         drawShapes(list, st.kind === "erase" ? "#000000" : st.color, map, bw, bh, st.kind === "flat");
         into(L.t, L.t.w, L.t.h);
-        const alpha = st.kind === "marker" ? 0.55 : st.opacity === undefined ? 1 : st.opacity;
+        const alpha = st.opacity === undefined ? 1 : st.opacity;
         drawQuad(scratch.tex, [x0, y0, bw, bh], [0, bh / scratch.h, bw / scratch.w, 0], L.t.w, L.t.h, alpha, st.kind === "erase" ? "out" : "over");
         return true;
     }
@@ -391,19 +394,6 @@ export function painter(canvas)
         }
     }
 
-    // What is over the drawing (render.js drew it on a canvas of the page's): taken onto the chip when it changes.
-    let overTex = null, overOn = false, overW = 0, overH = 0;
-    P.over = c =>
-    {
-        overOn = !!c;
-        if (!c) return;
-        if (!overTex || overW !== c.width || overH !== c.height) { overTex = upload(c, overTex); overW = c.width; overH = c.height; return; }
-        gl.bindTexture(gl.TEXTURE_2D, overTex);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, c);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    };
-
     // The view: "o" the drawing (as the scene has it), "cam", "dpr", "w" and "h" the view's size; "wetStroke" the
     // stroke under way on it, if any; "fade" its opacity; "moving": the view moving (it is kept as sharp as it was).
     P.show = (o, b, doc, get, cam, dpr, w, h, wetStroke, fade, moving) =>
@@ -438,10 +428,9 @@ export function painter(canvas)
         gl.disable(gl.BLEND);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
-        if (overOn) drawQuad(overTex, [0, 0, Wv, Hv], [0, 1, 1, 0], Wv, Hv, 1, "over");
     }
     // Put away: its pictures let go (but the program kept, for the next time).
-    P.forget = () => { drop(L ? L.t : null); L = null; drop(wet); drop(tail); wet = tail = null; going = null; drop(scratch); scratch = null; for (const t of tiles.values()) gl.deleteTexture(t.tex); tiles.clear(); for (const t of fillTex.values()) gl.deleteTexture(t); fillTex.clear(); if (overTex) gl.deleteTexture(overTex); overTex = null; overOn = false; };
+    P.forget = () => { drop(L ? L.t : null); L = null; drop(wet); drop(tail); wet = tail = null; going = null; drop(scratch); scratch = null; for (const t of tiles.values()) gl.deleteTexture(t.tex); tiles.clear(); for (const t of fillTex.values()) gl.deleteTexture(t); fillTex.clear(); };
     // Let go of for good: the chip's context too (a phone keeps only a few).
     P.dispose = () => { P.forget(); try { const lose = gl.getExtension("WEBGL_lose_context"); if (lose) lose.loseContext(); } catch (e) { } };
     return P;

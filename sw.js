@@ -4,7 +4,7 @@
 
 const CACHE = "canopy-web-viewer";
 const FILES = ["./", "index.html", "app.css", "config.js", "manifest.webmanifest", "vendor/jszip.min.js",
-    "js/app.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/gl.js", "js/offline.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js",
+    "js/app.js", "js/files.js", "js/lists.js", "js/drawing.js", "js/hierarchy.js", "js/saving.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/gl.js", "js/offline.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js",
     "icons/icon-180.png", "icons/icon-192.png", "icons/favicon.png",
     "fonts/IBMPlexSans-Regular.ttf", "fonts/IBMPlexSans-Medium.ttf", "fonts/IBMPlexSans-SemiBold.ttf"];
 

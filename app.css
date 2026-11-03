@@ -58,7 +58,6 @@ svg { display: block; }
 .bar .status.landed svg { animation: landed .7s cubic-bezier(.2,.9,.3,1.3); }
 @keyframes turn { to { transform: rotate(360deg); } }
 @keyframes landed { 0% { transform: scale(.7); color: var(--heading); } 45% { transform: scale(1.15); color: var(--heading); } 100% { transform: none; } }
-.bar.on-card .status { color: inherit; opacity: .55; }
 .bar.on-card .status.waiting { color: var(--notice); opacity: 1; }
 
 .page { flex: 1; padding: 8px calc(var(--right) + 16px) calc(var(--bottom) + 32px) calc(var(--left) + 16px); }
@@ -147,7 +146,6 @@ svg { display: block; }
 .corner { position: absolute; top: 10px; right: calc(var(--right) + 10px); z-index: 4; display: flex; gap: 6px; }
 .corner .icon { width: 42px; height: 42px; border-radius: var(--r-control); display: grid; place-items: center; background: var(--card); border: 1px solid var(--border); box-shadow: var(--menu-shadow); color: var(--ink); }
 .corner .icon:active { background: var(--button); }
-.corner .icon.on { color: var(--heading); }
 .project.full #head, .project.full .tabs { display: none; }
 .project.full .corner { top: calc(var(--top) + 10px); opacity: .55; transition: opacity .2s; }
 .project.full .corner:active, .project.full .corner:focus-within { opacity: 1; }
@@ -195,9 +193,8 @@ svg { display: block; }
 .entry.lit { z-index: 31; pointer-events: none; box-shadow: 0 0 0 2px var(--accent), 0 10px 28px rgba(0,0,0,.45); }
 .entry.sliding { transition: transform .15s ease; }
 .adders { display: flex; gap: 8px; margin-top: 12px; }
-.adder { flex: 1; display: flex; align-items: center; gap: 8px; white-space: nowrap; min-height: 50px; border-radius: 8px; padding: 0 16px; text-align: left; font: 500 16px var(--note); opacity: .7; border: 1.5px dashed currentColor; }
+.adder { flex: 1; display: flex; align-items: center; gap: 8px; white-space: nowrap; min-height: 50px; border-radius: 8px; padding: 0 16px; text-align: left; font: 500 16px var(--note); opacity: .7; border: 1.5px dashed currentColor; transition: transform .12s cubic-bezier(.2,.9,.3,1.3), opacity .12s; }
 .adder.small { flex: none; padding: 0 14px; font-size: 14px; border-style: solid; border-color: transparent; background: rgba(127,127,127,.12); }
-.adder { transition: transform .12s cubic-bezier(.2,.9,.3,1.3), opacity .12s; }
 .adder:active { opacity: 1; transform: scale(.95); }
 .entry:has(.check:active) { transform: scale(.975); transition: transform .1s; }   /* (pressed as its box is) */
 .note-line { display: block; margin: 18px auto 0; padding: 10px 14px; border-radius: var(--r-control); font: 500 14px var(--face); opacity: .6; }
@@ -259,10 +256,10 @@ svg { display: block; }
 .tools button { min-height: 38px; padding: 0 14px; border-radius: var(--r-control); font-size: 14px; font-weight: 500; }
 .tools button:active { background: var(--button); }
 /* Draw: the three tool slots, the brush and color, New drawing, Done */
-.drawbar .glyph { min-width: 40px; padding: 0; display: grid; place-items: center; color: var(--muted); }
+.drawbar .glyph { width: 40px; min-width: 40px; padding: 0; display: grid; place-items: center; color: var(--muted); }
 .drawbar .glyph.on { background: var(--chosen); color: var(--heading); }
 .drawbar .ink i { display: block; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--border); }
-.drawbar .sep { flex: none; width: 1px; align-self: stretch; margin: 6px 3px; background: var(--border); }
+.drawbar .sep { flex: none; width: 1px; align-self: stretch; margin: 6px 0; background: var(--border); }
 .tools .linkto { display: inline-flex; align-items: center; gap: 6px; max-width: 46vw; color: var(--heading); }
 .tools .linkto span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tools .danger { color: #ec8a7a; }
@@ -319,7 +316,6 @@ svg { display: block; }
 
 /* ---- the hierarchy: layers, and what is in each ---- */
 .htitle { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.htitle .quiet-button { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; }
 .hlist { position: relative; display: flex; flex-direction: column; gap: 2px; }
 .hrow { display: flex; align-items: center; gap: 2px; min-height: 46px; border-radius: var(--r-control); background: var(--card); }
 .hrow.hlayer { margin-top: 8px; color: var(--heading); }
@@ -345,8 +341,6 @@ svg { display: block; }
 /* ---- the drawing bar: three slots (a tap uses the tool shown, a hold picks another), the size and color, the
    hierarchy, Done; spaced so a popover's tab clears the buttons either side ---- */
 .drawbar { gap: 10px; padding: 6px 8px 6px 6px; }
-.drawbar .sep { margin: 6px 0; }
-.drawbar .glyph { width: 40px; min-width: 40px; }
 .drawbar .slot { position: relative; }
 .drawbar .slot .more { position: absolute; right: 4px; bottom: 4px; width: 0; height: 0; border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .7; }
 .drawbar .done { padding: 0 10px; }
@@ -403,7 +397,6 @@ svg { display: block; }
 .qedit[hidden] { display: none; }
 .qbtn { flex: 1; height: 36px; border-radius: var(--r-control); background: var(--button); color: var(--ink); font-size: var(--text-main); }
 .qbtn:active { background: var(--chosen); }
-
 
 /* A shape's color, on the bar of what is picked: its swatch */
 .tools .shapeink { padding: 0 10px; }
