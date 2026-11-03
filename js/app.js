@@ -14,7 +14,7 @@ import * as off from "./offline.js";
 import { addPicture, closePicture, folded, keepOnPhone, newProject, nextPicture, picture, showFiles, showPicture } from "./files.js";
 import { drag, drawLinkThumbs, finishTyping, growArea, keepInView, keyDown, listMenu, masonry, newList, oneColumn, refreshList, setOneColumn, showList, showLists, touchEntries } from "./lists.js";
 import { closePop, drawBar, drawMode, drawPress, drawSelection, dropperAt, endDrawing, fillAt, paintSel, pen, penAway, popOf, selecting, selectionWith, sessionInk, shapeColors } from "./drawing.js";
-import { catchUp, changed, forgetSaves, keepNow, keepPhoto, pastSave, photosReady, save, saveCopy, saveTimer, setState, statusHtml } from "./saving.js";
+import { catchUp, changed, forgetSaves, keepNow, keepPhoto, pastSave, photosReady, save, saveCopy, saveTimer, setState, state, stateWhy, statusHtml } from "./saving.js";
 import { hierarchy } from "./hierarchy.js";
 
 export const app = document.getElementById("app");
@@ -1307,7 +1307,7 @@ export function act(what, value, ev, el)
         case "close": goBack(); break;
         case "fitall": fitAll(true); break;
         case "fitboard": { const b = project.scene.boards.find(o => o.id === open.id); if (b && boardView) boardView.fit(b, 0.04, true); break; }
-        case "refresh": save(); catchUp(false); break;
+        case "refresh": if (state === "waiting" && stateWhy) toast("Not saved yet: " + stateWhy); save(); catchUp(false); break;   // (the reason said too: a phone shows no tooltip)
         case "copy": saveCopy(); break;
         case "newlist": newList(); break;
         case "newboard": newBoard(); break;
