@@ -568,7 +568,14 @@ export function drawStrokes(g, strokes)
         const R = Math.min(W, Math.ceil(Math.max(...corners.map(c => c[0])))), B = Math.min(H, Math.ceil(Math.max(...corners.map(c => c[1]))));
         if (R <= L || B <= T) continue;
         if (!alone) alone = document.createElement("canvas");
-        if (alone.width < R - L || alone.height < B - T) { alone.width = Math.max(alone.width, R - L); alone.height = Math.max(alone.height, B - T); }
+        if (alone.width < R - L || alone.height < B - T)
+        {
+            // (grown to fit, as wide as the widest and as tall as the tallest so far; but never past a few million
+            // pixels that way, which a phone's browser may not make: just as big as this one then)
+            let aw = Math.max(alone.width, R - L), ah = Math.max(alone.height, B - T);
+            if (aw * ah > ALONE_MOST) { aw = R - L; ah = B - T; }
+            alone.width = aw; alone.height = ah;
+        }
         const o = alone.getContext("2d");
         o.setTransform(1, 0, 0, 1, 0, 0); o.globalAlpha = 1; o.globalCompositeOperation = "source-over"; o.clearRect(0, 0, R - L, B - T);
         o.setTransform(m.a, m.b, m.c, m.d, m.e - L, m.f - T);
@@ -579,8 +586,10 @@ export function drawStrokes(g, strokes)
         g.drawImage(alone, 0, 0, R - L, B - T, L, T, R - L, B - T);
         g.restore();
     }
+    if (alone && alone.width * alone.height > ALONE_MOST) alone.width = alone.height = 0;   // (a big one let go at once)
 }
 let alone = null;   // (a stroke drawn on its own: one canvas, used again)
+const ALONE_MOST = 4e6;
 
 // One stroke's paint, at full strength, onto "g" (set to canvas units).
 function strokeInto(g, st)

@@ -155,7 +155,7 @@ export async function savedNow(p)
 
 // ---- saving: what is done here kept as steps, written back on top of whatever the file now is ----
 
-export let saving = false, saveTimer = null, state = "saved", stateWhy = "";
+export let saving = false, saveTimer = null, state = "saved", stateWhy = "", stateWhere = "";   // (where: the code that failed, file and line, said when the warning is tapped)
 
 export function statusHtml()
 {
@@ -173,7 +173,7 @@ let landed = false;   // a save just landed: the tick lit for a moment
 export function setState(s, why)
 {
     landed = state === "saving" && (s === "saved" || s === "updated");
-    state = s; stateWhy = why || "";
+    state = s; stateWhy = why || ""; stateWhere = "";
     app.querySelectorAll(".status").forEach(at => { at.outerHTML = statusHtml(); });
     app.querySelectorAll(".status").forEach(at => at.addEventListener("click", () => act(at.dataset.do)));
 }
@@ -254,6 +254,7 @@ export async function save()
         if (e instanceof dbx.SignedOut) return failed(e);
         if (p !== project) return;
         setState("waiting", e instanceof dbx.Offline ? "no connection; kept on this phone" : e.message);   // (kept here, and tried again)
+        stateWhere = e instanceof dbx.Offline ? "" : String(e.stack || "").split("\n").map(l => (l.match(/(\w+\.js):(\d+)/) || [])[0]).filter(Boolean).slice(0, 3).join(", ");
         clearTimeout(saveTimer);
         // (tried again a while later, and less often each time; not while drawing, nor with no connection at all)
         if (!pen && !(e instanceof dbx.Offline && navigator.onLine === false)) saveTimer = setTimeout(save, retryIn);
