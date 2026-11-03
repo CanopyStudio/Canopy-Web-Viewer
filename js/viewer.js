@@ -6,8 +6,6 @@ import * as gpu from "./gl.js";
 
 export class Viewer
 {
-    static SURE = 10;    // moved this far (screen pixels, all told), a contact is moving: drawing, or with another, a pinch
-    static STILL = 4;    // and the others, kept within this, are a hand resting
     // "host": the element it fills; "scene": () => what to draw; "get": pictures; "onTap": (x, y) on the canvas.
     constructor(host, scene, get, onTap)
     {
@@ -18,13 +16,6 @@ export class Viewer
         this.ctx = this.canvas.getContext("2d");
         this.cam = { s: 1, tx: 0, ty: 0 };
         this.pointers = new Map();
-        // Drawing with a finger or a stylus that works as one: the hand holding it touching the screen too. "strokes"
-        // (set by the app): whether a press would draw a stroke now. Then the contact that draws is the one that moves
-        // (a resting hand stays put), one landing once a stroke is well under way is let be, and two moving together
-        // still pan and pinch. "travel": how far each contact has moved; "from": where each came down.
-        this.strokes = null;
-        this.travel = new Map(); this.from = new Map();
-        this.penId = null; this.sorting = false;
         this.lastTap = 0;
         this.queued = false;
         this.movingUntil = 0;
@@ -273,79 +264,11 @@ export class Viewer
         }
         try { this.canvas.setPointerCapture(e.pointerId); } catch (x) { }   // (a pointer the browser no longer has: carried on without)
         this.pointers.set(e.pointerId, this.at(e));
-        this.travel.set(e.pointerId, 0); this.from.set(e.pointerId, this.at(e));
-        if (this.strokes && this.strokes() && e.pointerType !== "mouse") return this.downDrawing(e);
-        this.penId = null; this.sorting = false;
         this.moved = 0;
         this.downAt = performance.now();
         // One finger on something picked (or a handle of it): it is dragged, not the canvas ("grab" says what to do).
         if (this.pointers.size === 1 && this.grab) this.held = this.grab(this.pointers.get(e.pointerId), e);
         if (this.pointers.size === 2) { if (this.held) { if (this.held.cancel) this.held.cancel(); else this.held.end(); this.held = null; } this.pinch = this.spread(); }   // (a stroke begun is taken back: two fingers pan)
-    }
-    // A contact while drawing. The first: drawn with at once, as ever. Another, a stroke well under way: a hand resting
-    // as it goes, let be. Another, a stroke just begun (or none): which is drawing isn't known yet, so the stroke is
-    // taken back, and the contact that moves (the other kept still) draws, from where it came down; both moving, a pinch.
-    downDrawing(e)
-    {
-        const id = e.pointerId;
-        if (this.pointers.size === 1)
-        {
-            this.moved = 0; this.downAt = performance.now();
-            this.penId = id; this.sorting = false;
-            this.held = this.grab ? this.grab(this.pointers.get(id), e) : null;
-            return;
-        }
-        if (this.held && this.penId !== null && this.travel.get(this.penId) > Viewer.SURE) return;
-        if (this.pinch) return;
-        if (this.held) { if (this.held.cancel) this.held.cancel(); else this.held.end(); this.held = null; }
-        this.penId = null; this.sorting = true;
-    }
-    moveDrawing(e, id, was, now)
-    {
-        const step = Math.abs(now.x - was.x) + Math.abs(now.y - was.y);
-        this.travel.set(id, (this.travel.get(id) || 0) + step);
-        if (this.pinch)
-        {
-            if (this.pointers.size !== 2) return;
-            const p = this.spread();
-            this.cam.tx += p.x - this.pinch.x; this.cam.ty += p.y - this.pinch.y;
-            if (this.pinch.d > 0) this.zoomAt(p.x, p.y, p.d / this.pinch.d);
-            this.pinch = p; this.moved += 100;
-            return;
-        }
-        if (this.held) { if (id === this.penId) { this.moved += step; this.held.move(now, was, e); } return; }   // (any other contact: a hand, let be)
-        if (!this.sorting) return;
-        const here = [...this.pointers.keys()], far = here.filter(k => this.travel.get(k) > Viewer.SURE);
-        if (far.length >= 2) { this.sorting = false; if (this.pointers.size === 2) this.pinch = this.spread(); return; }
-        if (far.length === 1 && far[0] === id && here.every(k => k === id || this.travel.get(k) < Viewer.STILL))
-        {
-            // This one moving, the rest still: it draws, from where it came down (the way it has come since, straight).
-            this.sorting = false; this.penId = id; this.moved = 0; this.downAt = performance.now();
-            const from = this.from.get(id) || was;
-            this.held = this.grab ? this.grab(from, e) : null;
-            if (this.held) this.held.move(now, from, e);
-        }
-    }
-    upDrawing(e, id, p)
-    {
-        this.travel.delete(id); this.from.delete(id);
-        if (this.pointers.size < 2) this.pinch = null;
-        if (this.pointers.size === 0) this.sorting = false;
-        if (id !== this.penId || !this.held) return;
-        this.penId = null;
-        const h = this.held, now = performance.now();
-        this.held = null;
-        // A stroke: a quick dab just after another, close by, is a double tap, to zoom; neither leaves paint.
-        const quick = this.moved <= 6 && now - this.downAt < 250, dab = this.lastDab;
-        if (h.dab && quick && dab && now - dab.at < 320 && Math.hypot(p.x - dab.p.x, p.y - dab.p.y) < 32)
-        {
-            this.lastDab = null;
-            h.cancel();
-            if (dab.undo) dab.undo();
-            return this.zoomTap(p);
-        }
-        h.end();
-        this.lastDab = h.dab && quick ? { at: now, p, undo: h.undo } : null;
     }
     spread()
     {
@@ -357,7 +280,6 @@ export class Viewer
         if (!this.pointers.has(e.pointerId)) return;
         const was = this.pointers.get(e.pointerId), now = this.at(e);
         this.pointers.set(e.pointerId, now);
-        if (this.penId !== null || this.sorting) return this.moveDrawing(e, e.pointerId, was, now);
         if (this.pointers.size === 1 && this.held) { this.moved += Math.abs(now.x - was.x) + Math.abs(now.y - was.y); this.held.move(now, was, e); }
         else if (this.pointers.size === 1)
         {
@@ -379,8 +301,6 @@ export class Viewer
         if (!this.pointers.has(e.pointerId)) return;
         const p = this.pointers.get(e.pointerId);
         this.pointers.delete(e.pointerId);
-        if (this.penId !== null || this.sorting) return this.upDrawing(e, e.pointerId, p);
-        this.travel.delete(e.pointerId); this.from.delete(e.pointerId);
         if (this.pointers.size < 2) this.pinch = null;
         const now = performance.now();
         if (this.held && this.pointers.size === 0 && !this.held.dab) { const h = this.held; this.held = null; h.end(); if (this.moved > 10) return; }
