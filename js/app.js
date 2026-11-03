@@ -865,6 +865,7 @@ function editable(v)
     };
     v.overlay = ctx => { drawPicked(v, ctx); drawSelection(v, ctx); };
     v.grab = (at, e) => shaping && v === canvasView ? shapeFrom(v, at) : pen ? drawPress(v, at, e) : grabPicked(v, at);
+    v.strokes = () => !!pen && !shaping && !["select", "rect", "lasso", "fill", "dropper"].includes(pen.kind);   // (a press draws: the hand holding a stylus let be, Viewer.downDrawing)
     v.paintOn = () => pen && !project.base.doc.readOnly ? project.drawOn || null : null;   // (the drawing drawn on: shown from the graphics chip)
     v.overlayNeeded = () => !!(picked || paintSel || selecting);
     tools(v);   // (something copied: ready to paste)
