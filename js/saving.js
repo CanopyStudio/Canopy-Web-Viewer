@@ -70,7 +70,7 @@ async function paintTiles(frame, draw)
                 for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
                 if (!any) continue;
                 const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
-                if (!blob) throw new Error("This phone ran short of memory painting a drawing");
+                if (!blob) throw new Error("This device ran short of memory painting a drawing");
                 tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
             }
     }
@@ -209,7 +209,7 @@ export function keepNow()
 {
     clearTimeout(keepTimer); keepTimer = null;
     if (!project || project.local) return;
-    off.keepSteps(project.path, project.steps.slice()).then(ok => { if (!ok && !keepWarned) { keepWarned = true; toast("This phone's storage is full: changes not yet saved aren't kept on it"); } });
+    off.keepSteps(project.path, project.steps.slice()).then(ok => { if (!ok && !keepWarned) { keepWarned = true; toast("This device's storage is full: changes not yet saved aren't kept on it"); } });
 }
 addEventListener("pagehide", keepNow);
 document.addEventListener("visibilitychange", () => { if (document.hidden) keepNow(); });
@@ -219,7 +219,7 @@ export async function save()
 {
     if (!project || project.local || project.steps.length === 0) return;
     if (saving) { saveAgain = true; return; }   // (again once the one under way is done: it may be another project's)
-    if (navigator.onLine === false) { setState("waiting", "no connection; kept on this phone"); return; }   // (saved once there is one: the "online" event)
+    if (navigator.onLine === false) { setState("waiting", "no connection; kept on this device"); return; }   // (saved once there is one: the "online" event)
     saving = true;
     const p = project;
     setState("saving");
@@ -263,7 +263,7 @@ export async function save()
     {
         if (e instanceof dbx.SignedOut) return failed(e);
         if (p !== project) return;
-        setState("waiting", e instanceof dbx.Offline ? "no connection; kept on this phone" : e.message);   // (kept here, and tried again)
+        setState("waiting", e instanceof dbx.Offline ? "no connection; kept on this device" : e.message);   // (kept here, and tried again)
         stateWhere = e instanceof dbx.Offline ? "" : String(e.stack || "").split("\n").map(l => (l.match(/(\w+\.js):(\d+)/) || [])[0]).filter(Boolean).slice(0, 3).join(", ");
         clearTimeout(saveTimer);
         // (tried again a while later, and less often each time; not while drawing, nor with no connection at all)

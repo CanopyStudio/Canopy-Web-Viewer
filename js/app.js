@@ -230,6 +230,10 @@ function pictureGetter() { const g = (f, want) => project && project.get(f, want
 // ---- a project: three tabs (its lists, its boards, the canvas), and a list or board opened over them ----
 
 export function current() { return project && open && open.kind === "list" ? project.view.lists.find(l => l.id === open.id) : null; }
+// A project with no lists opens on its boards (or its canvas, with none) rather than on an empty Lists tab; the tab
+// picked last is kept for the next.
+function startTab() { if (tab === "lists" && !project.view.lists.length) tab = project.scene.boards.length ? "boards" : "canvas"; }
+
 export function sortedLists()
 {
     const order = project.view.order || project.base.doc.listOrder, at = new Map(order.map((id, i) => [id, i]));
@@ -304,6 +308,7 @@ function showCanvas(holder, fresh)
         closeViewers();
         holder.innerHTML = '<div class="stage"></div><div class="corner"></div>';
         canvasView = new Viewer(holder.querySelector(".stage"), () => project && project.scene, pictureGetter(), null);
+        canvasView.top = 62;   // (the corner's buttons: 42 high, 10 from the top, and as much again below)
         corner();
         editable(canvasView);
         canvasView.onFitAll = () => fitAll(true);
@@ -348,7 +353,7 @@ function measure(stage)
             "Pictures: " + seen.filter(e => e.img).length + " held of " + items.filter(o => o.kind === "image").length + " images and " + items.filter(o => o.kind === "paint").length + " drawings",
             "Memory: " + (c ? (c.pixels / 1e6).toFixed(1) : 0) + " of 48 megapixels; widest " + st.widest + " px",
             "Decoded " + st.decoded + " (" + dm.toFixed(0) + " ms each); waiting " + (c ? c.queue.length + c.busy : 0) + "; let go " + st.dropped + "; failed " + st.failed,
-            "Small ones: " + st.previews + " from the file, " + st.kept + " kept on this phone, " + st.made + " made now",
+            "Small ones: " + st.previews + " from the file, " + st.kept + " kept on this device, " + st.made + " made now",
             "On screen still to come: " + st.gaps + "; tried again " + st.retried + "; not in the file " + st.missing,
             "Too big for one piece: " + st.huge + "; came back blank: " + st.blank,
             "Zoom " + (vw ? (vw.cam.s * 100).toFixed(0) : "?") + "%, screen " + (vw ? vw.w + " \u00d7 " + vw.h + " at " + vw.dpr + "x" : "?") + (navigator.deviceMemory ? ", " + navigator.deviceMemory + " GB" : "")
@@ -1091,8 +1096,8 @@ export async function openPath(path)
         {
             if (!(e instanceof dbx.Offline)) throw e;
             got = await off.copy(path);
-            if (!got) throw new Error("No connection, and this project isn't kept on this phone.");
-            toast("No connection: opened the copy on this phone");
+            if (!got) throw new Error("No connection, and this project isn't kept on this device.");
+            toast("No connection: opened the copy on this device");
         }
         const doc = await readProject(path, got.bytes, false);
         const waiting = (await off.steps(path)) || [];   // changes made here that never got saved: done again
@@ -1103,6 +1108,7 @@ export async function openPath(path)
         project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         await photosReady(project);
         refreshView();
+        startTab();
         remember("canopy.recent", [path, ...remembered("canopy.recent", []).filter(r => r !== path)].slice(0, 5));
         open = null;
         setState(waiting.length ? "pending" : "saved");
@@ -1124,6 +1130,7 @@ async function openLocal(file)
         undos = []; redos = []; forgetSaves();
         project.get = render.pictures(doc, project.pictures, onPicture, project.cache);
         refreshView();
+        startTab();
         open = null;
         show();
     }
@@ -1240,8 +1247,8 @@ function accountMenu()
         + '<div class="section">Other</div>'
         + '<button class="pick" data-do="onecolumn" role="switch" aria-checked="' + oneColumn + '"><span>Lists in one column</span><span class="switch' + (oneColumn ? " on" : "") + '"><i></i></span></button>'
         + '<button class="pick" data-do="sound" role="switch" aria-checked="' + sound + '"><span>Sounds</span><span class="switch' + (sound ? " on" : "") + '"><i></i></span></button>'
-        + '<button class="pick" data-do="local"><span>Open a project from this phone</span></button>'
-        + '<div class="hint">Its changes stay on this phone until you save a copy.</div>'
+        + '<button class="pick" data-do="local"><span>Open a project from this device</span></button>'
+        + '<div class="hint">Its changes stay on this device until you save a copy.</div>'
         + '<button class="pick danger" data-do="signout"><span>Sign out</span></button>';
     sheetUp(build, (does, value, close, again) =>
     {

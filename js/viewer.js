@@ -15,6 +15,7 @@ export class Viewer
         host.appendChild(this.canvas);
         this.ctx = this.canvas.getContext("2d");
         this.cam = { s: 1, tx: 0, ty: 0 };
+        this.top = 0;   // how much of the view's top its own buttons cover (fitting leaves it clear)
         this.pointers = new Map();
         this.lastTap = 0;
         this.queued = false;
@@ -218,13 +219,14 @@ export class Viewer
         return true;
     }
 
-    // An area of the canvas filling the view (with "pad" of the view around it), eased there when "glide".
+    // An area of the canvas filling the view below its buttons (with "pad" of the view around it), eased there when "glide".
     fit(area, pad, glide)
     {
         if (this.w < 2) { this.pending = area; return; }
         pad = pad === undefined ? 0.06 : pad;
-        const s = Math.min(this.w * (1 - pad * 2) / Math.max(1, area.w), this.h * (1 - pad * 2) / Math.max(1, area.h));
-        const to = { s, tx: this.w / 2 - (area.x + area.w / 2) * s, ty: this.h / 2 - (area.y + area.h / 2) * s };
+        const h = Math.max(1, this.h - this.top);
+        const s = Math.min(this.w * (1 - pad * 2) / Math.max(1, area.w), h * (1 - pad * 2) / Math.max(1, area.h));
+        const to = { s, tx: this.w / 2 - (area.x + area.w / 2) * s, ty: this.top + h / 2 - (area.y + area.h / 2) * s };
         glide ? this.glide(to) : (this.cam = to, this.redraw());
     }
     glide(to)

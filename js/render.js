@@ -150,7 +150,7 @@ export function pictures(doc, added, redraw, c)
         if (keptCopy)
         {
             const img = await createImageBitmap(keptCopy.blob);
-            if (!blank(img)) { stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h }, from: "the copy kept on this phone" }; }
+            if (!blank(img)) { stats.kept++; return { img, k: img.width / keptCopy.w, full: false, src: { w: keptCopy.w, h: keptCopy.h }, from: "the copy kept on this device" }; }
             img.close();   // (a blank copy: made again below)
         }
         const got = await decode(await bytes, SMALL);
@@ -534,7 +534,13 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         ctx.font = "500 " + 12 / s + "px 'IBM Plex Sans', system-ui, sans-serif";
         ctx.fillStyle = dark(back(doc)) ? "rgba(234,236,235,.55)" : "rgba(21,22,22,.55)";
         ctx.textBaseline = "bottom";
-        for (const b of sc.boards) if (meets({ x: b.x, y: b.y - 24 / s, w: b.w, h: 24 / s })) ctx.fillText(b.name, b.x, b.y - 6 / s);
+        for (const b of sc.boards)
+        {
+            const band = { x: b.x, y: b.y - 20 / s, w: Math.min(b.w, ctx.measureText(b.name).width), h: 20 / s };
+            // (left out where it would sit over another board: zoomed out, pages close together)
+            if (!meets(band) || sc.boards.some(o => o !== b && o.x < band.x + band.w && o.x + o.w > band.x && o.y < band.y + band.h && o.y + o.h > band.y)) continue;
+            ctx.fillText(b.name, b.x, b.y - 6 / s);
+        }
     }
 }
 

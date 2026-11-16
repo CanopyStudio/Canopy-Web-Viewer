@@ -37,7 +37,7 @@ export async function showFiles()
         + (problem ? '<div class="problem">' + text(problem) + "</div>" : "")
         + (pins.length && folder === "" ? heading("pinned", "Pinned") + '<div class="rows" id="pinned">' + pins.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
         + (recent.length && folder === "" ? heading("recent", "Recent") + '<div class="rows">' + recent.map(r => item("file", fileName(r), inFolder(r), "open", r)).join("") + "</div>" : "")
-        + (phone.length && folder === "" ? heading("phone", "On this phone") + '<div class="rows">' + phone.map(k => item("file", fileName(k.path), waits.has(k.path) ? "Changes to save" : "Kept " + when(new Date(k.at).toISOString()), "open", k.path)).join("") + "</div>" : "")
+        + (phone.length && folder === "" ? heading("phone", "On this device") + '<div class="rows">' + phone.map(k => item("file", fileName(k.path), waits.has(k.path) ? "Changes to save" : "Kept " + when(new Date(k.at).toISOString()), "open", k.path)).join("") + "</div>" : "")
         + heading("here", folder === "" ? "Dropbox" : folder.split("/").pop())
         + (folder !== "" && !folded().includes("here") ? '<div class="where">' + ["Dropbox"].concat(folder.split("/").filter(Boolean)).map(text).join(" / ") + "</div>" : "")
         + '<div class="rows" id="items"><div class="empty">Loading…</div></div>'
@@ -54,8 +54,8 @@ export async function showFiles()
         const h = document.getElementById("items");
         if (h)
         {
-            h.innerHTML = '<div class="empty">No connection.' + (phone.length ? " Projects on this phone still open, and save once you're back online." : " Projects kept on this phone (tap the arrow by one) open without one.") + "</div>"
-                + (folder !== "" ? phone.map(k => item("file", fileName(k.path), waits.has(k.path) ? "Changes to save" : "On this phone", "open", k.path)).join("") : "");   // (in a folder: they are here too)
+            h.innerHTML = '<div class="empty">No connection.' + (phone.length ? " Projects on this device still open, and save once you're back online." : " Projects kept on this device (tap the arrow by one) open without one.") + "</div>"
+                + (folder !== "" ? phone.map(k => item("file", fileName(k.path), waits.has(k.path) ? "Changes to save" : "On this device", "open", k.path)).join("") : "");   // (in a folder: they are here too)
             wire(h);
         }
         return;
@@ -300,17 +300,17 @@ function item(kind, name, note, does, value)
     return '<div class="item-row"><button class="item' + (kind === "folder" ? " folder" : "") + '" data-do="' + does + '" data-value="' + text(value) + '">'
         + (kind === "folder" ? icon("folder", 18) : kind === "picture" ? '<img class="thumb" alt="">' : "") + '<span class="name">' + text(name) + "</span>"
         + (note ? '<span class="note">' + text(note) + "</span>" : "") + (kind === "folder" ? icon("chevron", 16) : "") + "</button>"
-        + (kind === "file" && waitingNow.has(value) ? '<button class="pin" data-do="fchanges" data-value="' + text(value) + '" aria-label="Changes on this phone" title="Changes on this phone">' + icon("more", 16) + "</button>" : "")
-        + (kind === "file" ? '<button class="pin keep' + (kept ? " on" : "") + '" data-do="keep" data-value="' + text(value) + '" aria-label="' + (kept ? "Remove from this phone" : "Keep on this phone") + '" title="' + (kept ? "Remove from this phone" : "Keep on this phone") + '">' + icon("download", 16) + "</button>"
+        + (kind === "file" && waitingNow.has(value) ? '<button class="pin" data-do="fchanges" data-value="' + text(value) + '" aria-label="Changes on this device" title="Changes on this device">' + icon("more", 16) + "</button>" : "")
+        + (kind === "file" ? '<button class="pin keep' + (kept ? " on" : "") + '" data-do="keep" data-value="' + text(value) + '" aria-label="' + (kept ? "Remove from this device" : "Keep on this device") + '" title="' + (kept ? "Remove from this device" : "Keep on this device") + '">' + icon("download", 16) + "</button>"
             + '<button class="pin' + (pinned ? " on" : "") + '" data-do="pin" data-value="' + text(value) + '" aria-label="' + (pinned ? "Unpin" : "Pin to top") + '" title="' + (pinned ? "Unpin" : "Pin to top") + '">' + icon("pin", 16) + "</button>" : "") + "</div>";
 }
 // A project kept on this phone for when there is no connection (a copy of it made now), or no longer.
 export async function keepOnPhone(path)
 {
-    if (off.has(path)) { await off.drop(path); toast("No longer kept on this phone"); showFiles(); return; }
-    toast("Keeping it on this phone\u2026");
-    try { const got = await dbx.read(path); await off.keep(path, got.bytes, got.rev); toast("Kept on this phone: it opens without a connection"); }
-    catch (e) { toast(e instanceof dbx.Offline ? "No connection: it can be kept once there is one" : e instanceof dbx.SignedOut || /^Couldn't|^That file/.test(e.message) ? e.message : "This phone hasn't room to keep it"); }
+    if (off.has(path)) { await off.drop(path); toast("No longer kept on this device"); showFiles(); return; }
+    toast("Keeping it on this device\u2026");
+    try { const got = await dbx.read(path); await off.keep(path, got.bytes, got.rev); toast("Kept on this device: it opens without a connection"); }
+    catch (e) { toast(e instanceof dbx.Offline ? "No connection: it can be kept once there is one" : e instanceof dbx.SignedOut || /^Couldn't|^That file/.test(e.message) ? e.message : "This device hasn't room to keep it"); }
     if (!project) showFiles();
 }
 // When it was saved, briefly: the time today, the day this year, else the day and year.
@@ -323,7 +323,7 @@ function when(iso)
 }
 function localOpener()
 {
-    return '<div class="local"><button class="quiet-button" data-do="pick">Open a project from this phone</button><span>Changes to a project opened this way stay on this phone until you save a copy.</span>'
+    return '<div class="local"><button class="quiet-button" data-do="pick">Open a project from this device</button><span>Changes to a project opened this way stay on this device until you save a copy.</span>'
         + '<input class="hidden-input" type="file" id="picker"></div>';
 }
 
