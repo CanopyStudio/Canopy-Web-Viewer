@@ -39,6 +39,7 @@ ICONS = [
     ("kind-arrow", "Arrow", "The hierarchy: an arrow"),
     ("kind-path", "Path", "The hierarchy: a path"),
     ("kind-type", "Type", "The hierarchy: type"),
+    ("kind-table", "Table", "The hierarchy: a table"),
     ("lists", "List", "The Lists tab"),
     ("boards", "panel Boards", "The Boards tab"),
     ("canvas", "kind grid", "The Canvas tab"),
@@ -64,6 +65,14 @@ ICONS = [
     ("saved", "saved", "Saved, in the top bars"),
     ("saving", "saving", "Saving"),
     ("waiting", "not saved", "Not saved yet (offline, say)"),
+    ("rect", "Rect", "Shapes, and its Rectangle"),
+    ("oval", "Oval", "Its Ellipse"),
+]
+
+# The viewer's own icons, drawn here (no desktop app has them): its name for each, its drawing, and where it is used.
+OWN = [
+    ("tosave", '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 16V8.4M8.6 11.6L12 8.2L15.4 11.6" fill="none" stroke="currentColor" stroke-width="2.667" stroke-linecap="round" stroke-linejoin="round"/>',
+     "Changes held to save (a project opened from the phone)"),
 ]
 
 def apps_folder():
@@ -116,6 +125,7 @@ def build(apps):
         svg, path = icon_svg(apps, source)
         if svg is None: missing.append((name, source)); continue
         got[name] = svg; rows.append((name, source, path, use, svg))
+    for name, svg, use in OWN: got[name] = svg; rows.append((name, "(the viewer's own)", "tools/from-board.py", use, svg))
     out["js/icons.js"] = ("// Canopy Board's icons (its Board/Icons, else the Kit's Kit/Icons), as drawn there: written by tools/from-board.py,\n"
         "// not by hand (icons.html shows them all). Named for what they do here.\n"
         "export const boardIcons = {\n" + ",\n".join("    %s: %s" % (json.dumps(k), json.dumps(v)) for k, v in got.items()) + "\n};\n")
@@ -126,7 +136,7 @@ def build(apps):
         "<style>body{margin:0;padding:24px;background:#161717;color:#EAECEB;font:14px/1.4 system-ui,sans-serif}h1{font-size:18px;margin:0 0 6px}"
         "p{color:#A5A8A7;margin:0 0 18px}table{border-collapse:collapse;width:100%;max-width:980px}td{padding:8px 10px;border-top:1px solid #343A38;vertical-align:middle}"
         "td.i{width:40px;color:#EAECEB}code{color:#A5A8A7;font-size:12px}</style></head><body>\n"
-        "<h1>The web viewer's icons</h1><p>Each is one of Canopy Board's own (Board/Icons, else Kit/Icons, else Viewer/Icons), copied in by tools/from-board.py.</p>\n"
+        "<h1>The web viewer's icons</h1><p>Each is one of Canopy Board's own (Board/Icons, else Kit/Icons, else Viewer/Icons), copied in by tools/from-board.py, but for the few the viewer draws itself.</p>\n"
         "<table><tr><td></td><td><b>Here</b></td><td><b>Board's icon</b></td><td><b>Its file</b></td><td><b>Where it's used</b></td></tr>\n" + cells + "</table></body></html>\n")
     return out, missing
 
@@ -139,7 +149,7 @@ def main():
     out, missing = build(apps)
     check = "--check" in sys.argv
     problems = ["%s: Board has no icon %r" % (n, s) for n, s in missing]
-    known = {n for n, _, _ in ICONS}
+    known = {n for n, _, _ in ICONS} | {n for n, _, _ in OWN}
     problems += ["the viewer uses icon %r, which isn't one of Board's (add it to ICONS here)" % n for n in sorted(used_icons() - known)]
     for path, text in out.items():
         full = os.path.join(HERE, path)

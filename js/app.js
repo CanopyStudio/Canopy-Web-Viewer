@@ -3,6 +3,7 @@
 // it from the phone. Changes are saved back as they happen.
 
 import * as cnpy from "./cnpy.js";
+import { openDocument, linkLibrary } from "./cdoc.js";
 import * as dbx from "./dropbox.js";
 import * as render from "./render.js";
 import { Viewer, thumbnail } from "./viewer.js";
@@ -185,7 +186,16 @@ const icons = boardIcons;
 export function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
 export function text(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 export function bar(title, left, right, cls, titleDoes) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + (titleDoes ? '<button data-do="' + titleDoes + '">' + text(title) + "</button>" : text(title)) + "</h1>" + (right || "") + "</header>"; }
-export function fileName(path) { return path.split("/").pop().replace(/\.cnpy$/i, ""); }
+export function fileName(path) { return path.split("/").pop().replace(/\.(cnpy|cdoc)$/i, ""); }
+// A project's file read: a .cnpy, or a .cdoc (to look at only), with its library, pictures and drawings from beside it.
+export async function readProject(path, bytes, local)
+{
+    const fetch = local ? async () => null : async p => { try { return (await dbx.read(p)).bytes; } catch (e) { return null; } };
+    if (/\.cdoc$/i.test(path)) return await openDocument(path, bytes, fetch, local ? async () => [] : async p => { try { return (await dbx.list(p)).filter(e => !e.folder); } catch (e) { return []; } });
+    const doc = await cnpy.open(bytes);
+    await linkLibrary(doc, path, fetch);
+    return doc;
+}
 export function iconButton(does, name, label, value, off) { return '<button class="icon" data-do="' + does + '"' + (value ? ' data-value="' + text(value) + '"' : "") + (off ? " disabled" : "") + ' aria-label="' + label + '" title="' + label + '">' + icon(name) + "</button>"; }
 // Undo and redo, for a bar.
 export function undoButtons() { return !project || project.base.doc.readOnly ? "" : iconButton("undo", "undo", "Undo", "", !undos.length) + iconButton("redo", "redo", "Redo", "", !redos.length); }
@@ -830,7 +840,7 @@ function openLink(href, v)
 export function kindName(id)
 {
     const o = project.scene.items.find(x => x.id === id);
-    return o ? ({ image: "Image", type: "Type", paint: "Drawing", sketch: "Drawing", list: "List", rect: "Rectangle", oval: "Ellipse", path: "Path", line: "Line", arrow: "Arrow" }[o.kind] || "Object") : "Object";
+    return o ? ({ image: "Image", type: "Type", paint: "Drawing", sketch: "Drawing", list: "List", rect: "Rectangle", oval: "Ellipse", path: "Path", line: "Line", arrow: "Arrow", table: "Table" }[o.kind] || "Object") : "Object";
 }
 let toastTimer = null;
 export function toast(words)
@@ -1084,7 +1094,7 @@ export async function openPath(path)
             if (!got) throw new Error("No connection, and this project isn't kept on this phone.");
             toast("No connection: opened the copy on this phone");
         }
-        const doc = await cnpy.open(got.bytes);
+        const doc = await readProject(path, got.bytes, false);
         const waiting = (await off.steps(path)) || [];   // changes made here that never got saved: done again
         if (me !== opening) return;
         if (project) render.forget(project.cache);
@@ -1107,7 +1117,7 @@ async function openLocal(file)
     problem = "";
     try
     {
-        const doc = await cnpy.open(new Uint8Array(await file.arrayBuffer()));
+        const doc = await readProject(file.name, new Uint8Array(await file.arrayBuffer()), true);
         if (project) render.forget(project.cache);
         project = { path: file.name, name: fileName(file.name), local: true, base: { doc, rev: null }, steps: [], pictures: new Map(), cache: render.cache() };
         history.pushState({ at: (history.state && history.state.at || 0) + 1, project: file.name, local: true, open: null }, "");

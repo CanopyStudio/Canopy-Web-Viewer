@@ -76,8 +76,15 @@ function readBody(key, rest, meta, ver)
             kind: "type", x: num(f[0]), y: num(f[1]), w: num(f[2]), h: num(f[3]), size: num(f[4]) || 48, leading: num(f[5]), tracking: num(f[6]),
             fill: col(f[7]), stroke: col(f[8]), width: num(f[9]), font: unescape(f[10] || ""), weight: parseInt(f[11], 10) || 400, italic: f[12] === "1",
             align: parseInt(f[13], 10) || 0, textCase: parseInt(f[14], 10) || 0, fixed: f[15] === "1", name: unescape(f[16] || ""), text: unescape(f[17] || ""),
-            tall: f[18] === "1", hscale: f.length > 22 ? num(f[22]) || 1 : 1
+            tall: f[18] === "1", deco: parseInt(f[19], 10) || 0, hscale: f.length > 22 ? num(f[22]) || 1 : 1
         });
+    }
+    else if (key === "table")
+    {
+        // A table: its grid as JSON (Board's TableData), laid out into fills, lines and type when drawn (tables.js).
+        let grid = null;
+        try { grid = JSON.parse(unescape(f.slice(8).join("|") || "{}")); } catch (e) { grid = null; }
+        Object.assign(o, { kind: "table", x: num(f[0]), y: num(f[1]), w: num(f[2]), h: num(f[3]), size: num(f[4]) || 12, fill: col(f[5]) || "#000000", font: unescape(f[6] || "") || "IBM Plex Sans", weight: 400, leading: 0, name: unescape(f[7] || "Table"), grid });
     }
     else if (key === "shape")
     {
@@ -116,7 +123,7 @@ export function parse(text)
 {
     const lines = text.split("\n");
     const items = [], lists = [], boards = [];
-    const doc = { lines, items, lists, boards, palette: [], empties: [], boardsLine: -1, lastBoardLine: -1, listOrder: [], listOrderLine: -1, folders: new Set(), hides: new Set(), locks: new Set(), fades: new Map(), canvas: "#161717", boardColor: null, boardLook: 0, version: ROWS_SINCE };
+    const doc = { lines, items, lists, boards, palette: [], empties: [], boardsLine: -1, lastBoardLine: -1, listOrder: [], listOrderLine: -1, folders: new Set(), hides: new Set(), locks: new Set(), fades: new Map(), fields: new Map(), groupFx: new Map(), library: null, styles: null, canvas: "#161717", boardColor: null, boardLook: 0, version: ROWS_SINCE };
     let meta = null, metaAt = -1, list = null, last = null;
     for (let i = 0; i < lines.length; i++)
     {
@@ -145,9 +152,19 @@ export function parse(text)
         else if (key === "board")
         {
             const f = rest.split("|");
-            boards.push({ id: f[0], x: num(f[1]), y: num(f[2]), w: num(f[3]), h: num(f[4]), name: unescape(f[5] || "Board"), line: i });
+            const b = { id: f[0], x: num(f[1]), y: num(f[2]), w: num(f[3]), h: num(f[4]), name: unescape(f[5] || "Board"), line: i };
+            // (a page board or master page board: G or A among its flags, then its margins, then master= / based=)
+            const flags = f[6] || "";
+            if (flags.includes("G")) b.page = true;
+            if (flags.includes("A")) b.master = true;
+            for (const kv of (f[8] || "").split(";")) { const eq = kv.indexOf("="); if (eq > 0 && kv.substring(0, eq) === "master") b.masterId = decodeURIComponent(kv.substring(eq + 1)); else if (eq > 0 && kv.substring(0, eq) === "based") b.basedOn = decodeURIComponent(kv.substring(eq + 1)); }
+            boards.push(b);
             doc.lastBoardLine = i;
         }
+        else if (key === "field") { const f = rest.split("|"); doc.fields.set(unescape(f[0] || ""), unescape(f.slice(1).join("|"))); }
+        else if (key === "library") doc.library = unescape(rest);
+        else if (key === "page") { const f = rest.split(" "); doc.pageSize = { w: num(f[0]), h: num(f[1]) }; }
+        else if (key === "effects") rest.split(" ").filter(Boolean).forEach(x => { const eq = x.indexOf("="); if (eq > 0) doc.groupFx.set(x.substring(0, eq), x.substring(eq + 1)); });
         else if (key === "meta") { meta = readMeta(rest); metaAt = i; continue; }
         else
         {
@@ -215,6 +232,8 @@ function placedLine(line, o, t)
     if (key === "type") { f[4] = K(f[4]); if (num(f[5]) > 0) f[5] = K(f[5]); }
     return key + " " + f.join("|");
 }
+// An object's body line moved by dx, dy (a document's frame, from its page's top left onto the canvas).
+export function movedLine(line, dx, dy) { return placedLine(line, null, { k: 1, ox: dx, oy: dy }); }
 export function compose(t, s)   // t then s
 {
     return { k: t.k * s.k, ox: t.ox * s.k + s.ox, oy: t.oy * s.k + s.oy };

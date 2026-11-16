@@ -340,7 +340,7 @@ async function rebase(p, bytes, rev)
 // A newer version saved elsewhere, read in (only with nothing of ours waiting: that goes through saving).
 export async function catchUp(quiet)
 {
-    if (!project || project.local || saving || editing || sheetOpen() || project.steps.length) return;
+    if (!project || project.local || project.base.doc.document || saving || editing || sheetOpen() || project.steps.length) return;   // (a document: read as it was opened)
     const p = project;
     try
     {

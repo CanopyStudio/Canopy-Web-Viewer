@@ -1,8 +1,12 @@
 // The canvas drawn in the browser, as the desktop app draws it: boards, pictures, drawings, shapes, lines, paths,
-// type and lists, each turned, slanted, faded, blended and clipped as it is there. Close, not exact: type lays out
-// with the browser's own shaping, and blurs and a path's dynamic corners are left out.
+// type (each letter's own look, sums worked out), tables and lists, each turned, slanted, faded, blended, blurred and
+// clipped as it is there, and a document's master pages behind its pages. Close, not exact: type lays out with the
+// browser's own shaping, and a path's dynamic corners and a blur's steps are left out.
 
 import { placed, order, movedTo, regrouped, hiddenLayers } from "./cnpy.js";
+import * as formulas from "./formulas.js";
+import { tableParts } from "./tables.js";
+import { furniture } from "./pages.js";
 
 const T = 256;   // a drawing's tiles, in pixels
 
@@ -390,7 +394,9 @@ export function scene(doc, view)
     const top = new Map();
     for (const o of items) if (o.group) for (const path of groupsOf(o.group).paths) top.set(path, o);
     for (const [g, o] of top) if (o.clip && o.group === g) masks.set(g, o);
-    return { doc, items, masks, hides: hiddenLayers(doc, view), boards: doc.boards.filter(b => !view.goneBoards.has(b.id)).concat(view.boards) };
+    const boards = doc.boards.filter(b => !view.goneBoards.has(b.id)).concat(view.boards);
+    // (a document's master pages' art, drawn behind each page using them: not objects of its own, so not picked or listed)
+    return { doc, items, behind: furniture(doc, items, boards), masks, hides: hiddenLayers(doc, view), boards, byId: new Map(items.map(o => [o.id, o])) };
 }
 
 // The groups an object is in, by their ids (outermost first), and the paths to each ("a", "a/b", ...): each group's
@@ -476,26 +482,52 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
     for (const b of under ? sc.boards : [])
     {
         if (!meets(b)) continue;
+        const paper = b.page || b.master;   // a document's page or master page: always white paper, square, whatever the boards' look
         ctx.beginPath();
-        ctx.roundRect(b.x, b.y, b.w, b.h, doc.boardLook !== 0 ? 0 : Math.min(8 / s, b.w / 2, b.h / 2));
-        if (doc.boardLook === 1) { ctx.strokeStyle = shade(back(doc), 0.3); ctx.lineWidth = 1 / s; ctx.stroke(); }
-        else { ctx.fillStyle = fill; ctx.fill(); }
+        ctx.roundRect(b.x, b.y, b.w, b.h, doc.boardLook !== 0 || paper ? 0 : Math.min(8 / s, b.w / 2, b.h / 2));
+        if (doc.boardLook === 1 && !paper) { ctx.strokeStyle = shade(back(doc), 0.3); ctx.lineWidth = 1 / s; ctx.stroke(); }
+        else { ctx.fillStyle = paper ? "#ffffff" : fill; ctx.fill(); }
     }
-    for (const o of part ? sc.items.slice(part.from, part.to) : sc.items)
+    current = sc;
+    const list = part ? sc.items.slice(part.from, part.to) : sc.items;
+    const one = (g, o) =>
     {
-        if (hidden(sc, o) || (o.clip && sc.masks.get(o.group) === o)) continue;
-        if (!meets(o.reach || outer(o, ctx))) continue;
-        ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(1, fade(doc, o)));
-        ctx.globalCompositeOperation = o.blend && o.blend !== "normal" ? o.blend : "source-over";
+        if (hidden(sc, o) || (o.clip && sc.masks.get(o.group) === o)) return;
+        if (!o.fx && !meets(o.reach || outer(o, g))) return;
+        g.save();
+        g.globalAlpha = Math.max(0, Math.min(1, fade(doc, o)));
+        g.globalCompositeOperation = o.blend && o.blend !== "normal" ? o.blend : "source-over";
         // Clipped by the mask of any group it is in.
         if (o.group && sc.masks.size)
         {
-            for (const path of groupsOf(o.group).paths) { const m = sc.masks.get(path); if (m && m !== o) { const p = outline(m); if (p) ctx.clip(p); } }
+            for (const path of groupsOf(o.group).paths) { const m = sc.masks.get(path); if (m && m !== o) { const p = outline(m); if (p) g.clip(p); } }
         }
-        try { drawOne(ctx, o, doc, s, get, redraw, opts.wet); } catch (e) { }
-        ctx.restore();
-    }
+        try { if (o.fx) blurred(g, o.fx, s, h2 => drawOne(h2, o, doc, s, get, redraw, opts.wet)); else drawOne(g, o, doc, s, get, redraw, opts.wet); } catch (e) { }
+        g.restore();
+    };
+    // A group with an effect (a blur): what is in it drawn together, then blurred as one (each group inside it too).
+    const run = (g, from, depth) =>
+    {
+        let i = from;
+        while (i < list.length)
+        {
+            const o = list[i], paths = o.group ? groupsOf(o.group).paths : [];
+            if (depth > 0 && !(paths.length >= depth && paths[depth - 1] === run.path[depth - 1])) return i;   // (out of the group)
+            const k = doc.groupFx.size ? paths.findIndex((p, n) => n >= depth && doc.groupFx.has(p.substring(p.lastIndexOf("/") + 1))) : -1;
+            if (k < 0) { one(g, o); i++; continue; }
+            const path = paths[k], fx = doc.groupFx.get(path.substring(path.lastIndexOf("/") + 1));
+            const was = run.path;
+            run.path = paths;
+            let next = i;
+            blurred(g, fx, s, h2 => { next = run(h2, i, k + 1); });
+            run.path = was;
+            i = Math.max(next, i + 1);
+        }
+        return i;
+    };
+    if (sc.behind && sc.behind.length && (!part || (part.under && part.from === 0))) for (const o of sc.behind) one(ctx, o);
+    run.path = [];
+    run(ctx, 0, 0);
     // The boards' names, over the art (a picture reaching over a board's top edge never hides one).
     if (opts.names !== false && (!part || part.names))
     {
@@ -1252,6 +1284,7 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
             return;
         }
         case "type": drawType(ctx, o, b, redraw); return;
+        case "table": for (const q of tableParts(o, current ? current.doc : null, measureType)) drawOne(ctx, q, doc, s, get, redraw, wet); return;
         case "list": drawList(ctx, o); return;
     }
 }
@@ -1276,32 +1309,158 @@ export function wrap(ctx, text, width)
     }
     return out;
 }
+// Type as it is shown: its sums worked out (formulas.js) and each letter's own look ("runs", or the letters' looks a
+// master page's copy carries), in the case it is set in.
+let current = null;   // the scene being drawn (what a sum's picks are found in)
+function shownType(o)
+{
+    let text = o.text || "", per = o._per || (o.runs ? formulas.overs(o.runs, text.length) : null);
+    if (formulas.has(text))
+    {
+        const byId = current && current.byId;
+        const r = formulas.shown(text, per || new Array(text.length).fill(null), o.id, id => byId ? byId.get(id) : null);
+        text = r.text; per = o.runs || o._per ? r.per : null;
+    }
+    if (o.textCase) text = cased(text, o.textCase);
+    return { text, per: per && per.some(Boolean) ? per : null };
+}
+function fontOf(o, q) { const it = q && q.italic !== undefined ? q.italic : o.italic, w = q && q.weight !== undefined ? q.weight : o.weight, z = q && q.size !== undefined ? q.size : o.size, f = q && q.font ? q.font : o.font; return (it ? "italic " : "") + w + " " + z + "px \"" + f + "\", system-ui, sans-serif"; }
+// Its lines, at a width (0: none, each paragraph one line): each a run of pieces, every piece one look, measured.
+function layType(ctx, o, width, redraw)
+{
+    const { text, per } = shownType(o);
+    wantFont(o.font, o.weight, o.italic, redraw);
+    const look = i => per ? per[i] : null, same = (a, b) => a === b;
+    const lines = [];
+    let at = 0;
+    for (const para of text.split("\n"))
+    {
+        // The paragraph in words (spaces kept), each word in pieces of one look.
+        const words = [];
+        for (const m of para.matchAll(/\s+|\S+/g))
+        {
+            const pieces = [];
+            for (let i = 0; i < m[0].length; i++)
+            {
+                const q = look(at + m.index + i), last = pieces[pieces.length - 1];
+                if (last && same(last.q, q)) last.t += m[0][i]; else pieces.push({ t: m[0][i], q });
+            }
+            words.push({ space: /^\s/.test(m[0]), pieces });
+        }
+        let line = { pieces: [], w: 0 }, pending = [];
+        const measure = p =>
+        {
+            if (p.q && p.q.font) wantFont(p.q.font, p.q.weight || o.weight, !!p.q.italic, redraw);
+            const size = p.q && p.q.size !== undefined ? p.q.size : o.size, tr = p.q && p.q.tracking !== undefined ? p.q.tracking : o.tracking;
+            const deco = p.q && p.q.deco !== undefined ? p.q.deco : o.deco || 0;
+            // (superscript and subscript: set smaller, and raised or lowered, as Board sets them)
+            p.rise = deco & 4 ? -0.36 * size : deco & 8 ? 0.14 * size : 0;
+            p.f = fontOf(o, deco & 12 ? { ...(p.q || {}), size: size * 0.62 } : p.q);
+            ctx.font = fontOf(o, p.q);
+            const full = ctx.measureText("Hg");
+            ctx.font = p.f;
+            if ("letterSpacing" in ctx) ctx.letterSpacing = (tr / 1000 * size) + "px";
+            const m = ctx.measureText(p.t);
+            p.w = m.width; p.size = size; p.tracking = tr; p.deco = deco;
+            p.asc = full.fontBoundingBoxAscent || size * 0.92; p.desc = full.fontBoundingBoxDescent || size * 0.24;
+            return p;
+        };
+        for (const wd of words)
+        {
+            const ps = wd.pieces.map(measure), ww = ps.reduce((a, p) => a + p.w, 0);
+            if (wd.space) { pending = ps; continue; }
+            const pw = pending.reduce((a, p) => a + p.w, 0);
+            if (width > 0 && line.pieces.length && line.w + pw + ww > width) { lines.push(line); line = { pieces: [], w: 0 }; pending = []; }
+            for (const p of (line.pieces.length ? pending : []).concat(ps)) { line.pieces.push(p); line.w += p.w; }
+            pending = [];
+        }
+        if (!line.pieces.length) line.pieces.push(measure({ t: "", q: look(at) }));
+        lines.push(line);
+        at += para.length + 1;
+    }
+    if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
+    for (const l of lines)
+    {
+        l.asc = Math.max(...l.pieces.map(p => p.asc)); l.desc = Math.max(...l.pieces.map(p => p.desc));
+        const size = Math.max(...l.pieces.map(p => p.size));
+        l.h = o.leading > 0 ? o.leading : o.leading < 0 ? -o.leading * size : l.asc + l.desc;
+    }
+    return lines;
+}
+// How tall type comes out at its width (a table's cells).
+export function measureType(o) { const ctx = measureCtx(); const hs = o.hscale || 1; return layType(ctx, o, o.fixed ? o.w / hs : 0, () => { }).reduce((a, l) => a + l.h, 0); }
 function drawType(ctx, o, b, redraw)
 {
-    wantFont(o.font, o.weight, o.italic, redraw);
-    ctx.font = (o.italic ? "italic " : "") + o.weight + " " + o.size + "px \"" + o.font + "\", system-ui, sans-serif";
-    if ("letterSpacing" in ctx) ctx.letterSpacing = (o.tracking / 1000 * o.size) + "px";
-    const hs = o.hscale || 1;
-    const lines = wrap(ctx, cased(o.text, o.textCase), o.fixed ? b.w / hs : 0);
-    const m = ctx.measureText("Hg");
-    const asc = m.fontBoundingBoxAscent || o.size * 0.92, desc = m.fontBoundingBoxDescent || o.size * 0.24;
-    const lh = o.leading > 0 ? o.leading : o.leading < 0 ? -o.leading * o.size : asc + desc;
+    const hs = o.hscale || 1, room = b.w / hs;
+    const lines = layType(ctx, o, o.fixed ? room : 0, redraw);
     ctx.save();
     ctx.translate(b.x, b.y);
     ctx.scale(hs, 1);
-    if (o.tall) { ctx.beginPath(); ctx.rect(0, 0, b.w / hs, b.h); ctx.clip(); }
-    const f = paint(ctx, o, { x: 0, y: 0, w: b.w / hs, h: b.h });
+    if (o.tall) { ctx.beginPath(); ctx.rect(0, 0, room, b.h); ctx.clip(); }
+    const f = paint(ctx, o, { x: 0, y: 0, w: room, h: b.h });
     ctx.textBaseline = "alphabetic";
-    lines.forEach((line, i) =>
+    let y = 0;
+    for (const l of lines)
     {
-        const wl = ctx.measureText(line).width, room = b.w / hs;
-        const x = o.align === 1 ? (room - wl) / 2 : o.align === 2 ? room - wl : 0;
-        const y = asc + i * lh;
-        if (f) { ctx.fillStyle = f; ctx.fillText(line, x, y); }
-        if (o.stroke && o.width > 0) { ctx.strokeStyle = rgba(o.stroke); ctx.lineWidth = o.width; ctx.lineJoin = "round"; ctx.strokeText(line, x, y); }
-    });
+        const wl = l.w - (l.pieces.length && /^\s+$/.test(l.pieces[l.pieces.length - 1].t) ? l.pieces[l.pieces.length - 1].w : 0);
+        let x = o.align === 1 ? (room - wl) / 2 : o.align === 2 ? room - wl : 0;
+        const base = y + l.asc + (l.h - l.asc - l.desc) / 2;   // (a line's extra height shared above and below it, as Board sets it)
+        for (const p of l.pieces)
+        {
+            ctx.font = p.f;
+            if ("letterSpacing" in ctx) ctx.letterSpacing = (p.tracking / 1000 * p.size) + "px";
+            const ink = p.q && p.q.fill ? rgba(p.q.fill) : f;
+            if (ink) { ctx.fillStyle = ink; ctx.fillText(p.t, x, base + p.rise); }
+            if (o.stroke && o.width > 0) { ctx.strokeStyle = rgba(o.stroke); ctx.lineWidth = o.width; ctx.lineJoin = "round"; ctx.strokeText(p.t, x, base + p.rise); }
+            const deco = p.deco;
+            if (deco & 3 && ink && p.t.trim())   // underline 1, strike 2
+            {
+                ctx.fillStyle = ink;
+                const th = Math.max(0.5, p.size * 0.06);
+                if (deco & 1) ctx.fillRect(x, base + p.size * 0.12, p.w, th);
+                if (deco & 2) ctx.fillRect(x, base - p.size * 0.3, p.w, th);
+            }
+            x += p.w;
+        }
+        y += l.h;
+    }
     ctx.restore();
     if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
+}
+
+// ---- blurs (Board's Effects): Gaussian, or a smear one way ("m"), by an amount in canvas units ----
+
+let blurCanvases = [];
+function blurred(ctx, fx, s, drawFn)
+{
+    const m = /^([gm])([\d.]+)(?:@(-?[\d.]+))?/.exec(fx || "");
+    if (!m) { drawFn(ctx); return; }
+    const cv = ctx.canvas, depth = blurred.depth = (blurred.depth || 0) + 1;
+    const own = blurCanvases[depth - 1] || (blurCanvases[depth - 1] = document.createElement("canvas"));
+    if (own.width !== cv.width || own.height !== cv.height) { own.width = cv.width; own.height = cv.height; }
+    const g = own.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, own.width, own.height);
+    g.setTransform(ctx.getTransform());
+    try { drawFn(g); } finally { blurred.depth--; }
+    const k = Math.hypot(ctx.getTransform().a, ctx.getTransform().b), px = parseFloat(m[2]) * k;   // (its amount in this canvas's pixels)
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (m[1] === "g") { if ("filter" in ctx) ctx.filter = "blur(" + px / 2 + "px)"; ctx.drawImage(own, 0, 0); }
+    else
+    {
+        // A smear: copies laid along it, averaged.
+        const a = (parseFloat(m[3]) || 0) * Math.PI / 180, n = Math.max(2, Math.min(24, Math.round(px / 3))), was = ctx.globalAlpha;
+        const out = blurCanvases[8] || (blurCanvases[8] = document.createElement("canvas"));
+        if (out.width !== cv.width || out.height !== cv.height) { out.width = cv.width; out.height = cv.height; }
+        const o2 = out.getContext("2d");
+        o2.setTransform(1, 0, 0, 1, 0, 0); o2.clearRect(0, 0, out.width, out.height);
+        o2.globalCompositeOperation = "lighter"; o2.globalAlpha = 1 / n;
+        for (let i = 0; i < n; i++) { const d = (i / (n - 1) - 0.5) * px; o2.drawImage(own, Math.cos(a) * d, Math.sin(a) * d); }
+        o2.globalCompositeOperation = "source-over"; o2.globalAlpha = 1;
+        ctx.globalAlpha = was;
+        ctx.drawImage(out, 0, 0);
+    }
+    ctx.restore();
 }
 
 // ---- lists, as cards (the same numbers as the desktop app's, in the list's own units) ----

@@ -101,14 +101,14 @@ async function rpc(name, body)
 
 // Pictures Dropbox can show a preview of (made by Dropbox, so even a phone's HEIC photos show).
 export const PICTURE = /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp)$/i;
-// A folder's folders, .cnpy files and pictures ("" is the top), folders first, each by name.
+// A folder's folders, projects (.cnpy, and documents: .cdoc) and pictures ("" is the top), folders first, each by name.
 export async function list(path)
 {
     let page = await rpc("files/list_folder", { path, include_non_downloadable_files: false });
     const all = page.entries.slice();
     while (page.has_more) { page = await rpc("files/list_folder/continue", { cursor: page.cursor }); all.push(...page.entries); }
     return all
-        .filter(e => e[".tag"] === "folder" || /\.cnpy$/i.test(e.name) || PICTURE.test(e.name))
+        .filter(e => e[".tag"] === "folder" || /\.(cnpy|cdoc)$/i.test(e.name) || PICTURE.test(e.name))
         .map(e => ({ folder: e[".tag"] === "folder", picture: e[".tag"] !== "folder" && PICTURE.test(e.name), name: e.name, path: e.path_display, modified: e.server_modified }))
         .sort((a, b) => (b.folder - a.folder) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
 }

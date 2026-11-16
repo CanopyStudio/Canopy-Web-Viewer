@@ -38,7 +38,7 @@ export function hierarchyModel()
 function objectName(o) { return (o.name || kindName(o.id)) + (o.kind === "sketch" || o.strokes ? "*" : ""); }
 function kindIcon(o)
 {
-    return { image: "photo", paint: "draw", sketch: "draw", list: "lists", rect: "kind-rect", oval: "kind-oval", line: "kind-line", arrow: "kind-arrow", path: "kind-path", type: "kind-type" }[o.kind] || "kind-rect";
+    return { image: "photo", paint: "draw", sketch: "draw", list: "lists", rect: "kind-rect", oval: "kind-oval", line: "kind-line", arrow: "kind-arrow", path: "kind-path", type: "kind-type", table: "kind-table" }[o.kind] || "kind-rect";
 }
 export function hierarchy()
 {
