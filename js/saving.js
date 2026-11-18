@@ -42,7 +42,7 @@ async function paintTiles(frame, draw)
     const c0 = Math.floor(frame.x / T), r0 = Math.floor(frame.y / T), c1 = Math.floor((frame.x + frame.w - 1) / T), r1 = Math.floor((frame.y + frame.h - 1) / T);
     const count = (c1 - c0 + 1) * (r1 - r0 + 1);
     // (past this, something has gone wrong with what it reaches: said so, not gone over tile by tile for minutes)
-    if (!(count <= 4000)) throw new Error("A drawing reaches too far to save (" + (c1 - c0 + 1) + " by " + (r1 - r0 + 1) + " tiles, from " + Math.round(frame.x) + ", " + Math.round(frame.y) + ")");
+    if (!(count <= 4000)) throw new Error("A raster layer reaches too far to save (" + (c1 - c0 + 1) + " by " + (r1 - r0 + 1) + " tiles, from " + Math.round(frame.x) + ", " + Math.round(frame.y) + ")");
     const whole = count * T * T <= 16e6;   // (a phone's browser makes no bigger canvas: Safari's limit)
     let all = null, ag = null;
     const cv = document.createElement("canvas");   // (one tile's, used again for each: a phone's browser allows only so much canvas)
@@ -70,7 +70,7 @@ async function paintTiles(frame, draw)
                 for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 0;
                 if (!any) continue;
                 const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
-                if (!blob) throw new Error("This device ran short of memory painting a drawing");
+                if (!blob) throw new Error("This device ran short of memory painting a raster layer");
                 tiles.set(c + "_" + r + ".png", new Uint8Array(await blob.arrayBuffer()));
             }
     }
@@ -104,7 +104,7 @@ async function repaint(doc, view, id)
         const tiles = render.tilesOf(doc, x.file);
         let a = x.frame && x.frame.w > 0 ? x.frame : null;
         if (!a && tiles.length) { const cs = tiles.map(t => t.c), rs = tiles.map(t => t.r); a = { x: Math.min(...cs) * T, y: Math.min(...rs) * T, w: (Math.max(...cs) - Math.min(...cs) + 1) * T, h: (Math.max(...rs) - Math.min(...rs) + 1) * T }; }
-        const b = x === o && snap ? (view.moved.has(x.id) ? cnpy.placed(x, view.moved.get(x.id)) : x) : own(x);
+        const b = own(x);
         return a && b.w > 0 && b.h > 0 ? { x, a, b, sx: b.w / a.w, sy: b.h / a.h, tiles } : null;
     };
     const me = area(o);
@@ -165,7 +165,8 @@ export async function savedNow(p)
 
 // ---- saving: what is done here kept as steps, written back on top of whatever the file now is ----
 
-export let saving = false, saveTimer = null, state = "saved", stateWhy = "", stateWhere = "";   // (where: the code that failed, file and line, said when the warning is tapped)
+let saving = false;
+export let saveTimer = null, state = "saved", stateWhy = "", stateWhere = "";   // (where: the code that failed, file and line, said when the warning is tapped)
 
 export function statusHtml()
 {

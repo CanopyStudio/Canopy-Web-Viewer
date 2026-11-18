@@ -9,7 +9,7 @@
 const find = (all, id) => id && Array.isArray(all) ? all.find(o => o && o.id === id) || null : null;
 
 // A color as "#RRGGBB": a library color's id, or a hex given directly.
-export function colorOf(lib, v)
+function colorOf(lib, v)
 {
     if (typeof v !== "string") return null;
     if (v.startsWith("#")) return v;
@@ -18,7 +18,7 @@ export function colorOf(lib, v)
 }
 
 // A style as it comes out: what it sets, over what the styles it is based on set.
-export function resolve(lib, id)
+function resolve(lib, id)
 {
     if (!lib) return null;
     const all = (lib.paragraphStyles || []).concat(lib.characterStyles || []);
@@ -32,7 +32,7 @@ export function resolve(lib, id)
 }
 
 // Type given a paragraph style's values (Board's NamedStyles.Apply), as a copy.
-export function styled(o, lib, id)
+function styled(o, lib, id)
 {
     const s = resolve(lib, id);
     if (!s) return o;

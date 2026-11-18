@@ -69,9 +69,9 @@ async function arrive(to, from)
     if (to.open && (!open || open.kind !== to.open.kind || open.id !== to.open.id))
     {
         if (open) { open = null; show(); }
-        travelling = true;   // (the history has this step already)
+        traveling = true;   // (the history has this step already)
         try { if (to.open.kind === "list") openList(to.open.id, from); else openBoard(to.open.id, from); }
-        finally { travelling = false; }
+        finally { traveling = false; }
     }
     else if (!to.open && open) closeOver();
 }
@@ -182,13 +182,12 @@ export const feel = {
 // ---- small pieces ----
 
 // Every icon is one of Canopy Board's own (js/icons.js, written by tools/from-board.py; icons.html shows them).
-const icons = boardIcons;
-export function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + icons[name] + "</svg>"; }
+export function icon(name, size) { return '<svg width="' + (size || 22) + '" height="' + (size || 22) + '" viewBox="0 0 24 24" aria-hidden="true">' + boardIcons[name] + "</svg>"; }
 export function text(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 export function bar(title, left, right, cls, titleDoes) { return '<header class="bar' + (cls ? " " + cls : "") + '">' + (left || "") + "<h1>" + (titleDoes ? '<button data-do="' + titleDoes + '">' + text(title) + "</button>" : text(title)) + "</h1>" + (right || "") + "</header>"; }
 export function fileName(path) { return path.split("/").pop().replace(/\.(cnpy|cdoc)$/i, ""); }
 // A project's file read: a .cnpy, or a .cdoc (to look at only), with its library, pictures and drawings from beside it.
-export async function readProject(path, bytes, local)
+async function readProject(path, bytes, local)
 {
     const fetch = local ? async () => null : async p => { try { return (await dbx.read(p)).bytes; } catch (e) { return null; } };
     if (/\.cdoc$/i.test(path)) return await openDocument(path, bytes, fetch, local ? async () => [] : async p => { try { return (await dbx.list(p)).filter(e => !e.folder); } catch (e) { return []; } });
@@ -350,7 +349,7 @@ function measure(stage)
         const vw = canvasView || boardView, items = project ? project.scene.items : [];
         box.textContent = [
             "Drawing: " + avg.toFixed(0) + " ms average, " + worst.toFixed(0) + " ms worst (last 20), " + (recent.length / 2).toFixed(1) + " a second",
-            "Pictures: " + seen.filter(e => e.img).length + " held of " + items.filter(o => o.kind === "image").length + " images and " + items.filter(o => o.kind === "paint").length + " drawings",
+            "Pictures: " + seen.filter(e => e.img).length + " held of " + items.filter(o => o.kind === "image").length + " images and " + items.filter(o => o.kind === "paint").length + " raster layers",
             "Memory: " + (c ? (c.pixels / 1e6).toFixed(1) : 0) + " of 48 megapixels; widest " + st.widest + " px",
             "Decoded " + st.decoded + " (" + dm.toFixed(0) + " ms each); waiting " + (c ? c.queue.length + c.busy : 0) + "; let go " + st.dropped + "; failed " + st.failed,
             "Small ones: " + st.previews + " from the file, " + st.kept + " kept on this device, " + st.made + " made now",
@@ -638,7 +637,7 @@ function paste(v)
     const doc = project.base.doc, here = clip.path === project.path;
     // A drawing's pixels are files of their own: pasted only into the project it came from.
     const things = here ? clip.things : clip.things.filter(th => { const f = cnpy.fileOf(th); return !f || f.kind !== "paint"; });
-    if (things.length < clip.things.length) toast(things.length ? "Drawings only paste into their own project" : "A drawing only pastes into its own project");
+    if (things.length < clip.things.length) toast(things.length ? "Raster layers only paste into their own project" : "A raster layer only pastes into its own project");
     if (!things.length) return;
     // Where: just off the original, when it is in view (a little further each time); else in the middle of the view.
     const m = v.middle(), b = clip.box, cx = b.x + b.w / 2, cy = b.y + b.h / 2, step1 = 24 / v.cam.s;
@@ -845,7 +844,7 @@ function openLink(href, v)
 export function kindName(id)
 {
     const o = project.scene.items.find(x => x.id === id);
-    return o ? ({ image: "Image", type: "Type", paint: "Drawing", sketch: "Drawing", list: "List", rect: "Rectangle", oval: "Ellipse", path: "Path", line: "Line", arrow: "Arrow", table: "Table" }[o.kind] || "Object") : "Object";
+    return o ? ({ image: "Image", type: "Type", paint: "Raster layer", sketch: "Raster layer", list: "List", rect: "Rectangle", oval: "Ellipse", path: "Path", line: "Line", arrow: "Arrow", table: "Table" }[o.kind] || "Object") : "Object";
 }
 let toastTimer = null;
 export function toast(words)
@@ -911,8 +910,8 @@ function shrink(done)
                  : over.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(24px)" }], { duration: 160, easing: "cubic-bezier(.16,1,.3,1)", fill: "forwards" });
     a.onfinish = done;
 }
-let travelling = false;
-export function stepTo(o) { if (!travelling && (!open || open.kind !== o.kind || open.id !== o.id)) { const at = (history.state && history.state.at || 0) + 1; history.pushState({ ...here(), open: o, at }, ""); try { sessionStorage.setItem("canopy.nav", String(at)); } catch (e) { } } }
+let traveling = false;
+export function stepTo(o) { if (!traveling && (!open || open.kind !== o.kind || open.id !== o.id)) { const at = (history.state && history.state.at || 0) + 1; history.pushState({ ...here(), open: o, at }, ""); try { sessionStorage.setItem("canopy.nav", String(at)); } catch (e) { } } }
 function openList(id, card)
 {
     stepTo({ kind: "list", id });
@@ -1012,7 +1011,7 @@ export function undoRedo(redo)
         if (doing.every(x => x.t === "unstroke" || x.t === "stroke")) toast("Saved strokes can't be undone");
         return;
     }
-    if (again.length) to.push(again);
+    to.push(again);
     if (picked) picked.ids = picked.ids.filter(id => project.scene.items.some(o => o.id === id));
     if (picked && !picked.ids.length) picked = null;
     if (open && open.kind === "board" && !project.scene.boards.some(b => b.id === open.id)) open = null;
@@ -1446,7 +1445,7 @@ if (standalone)
 // ---- a newer version published: said so, and taken on a tap (each file fetched fresh first, so the phone doesn't
 // keep any of the old ones) ----
 
-const FILES = ["index.html", "app.css", "sw.js", "js/app.js", "js/files.js", "js/lists.js", "js/drawing.js", "js/hierarchy.js", "js/saving.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/gl.js", "js/offline.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js"];
+const FILES = ["index.html", "app.css", "sw.js", "js/app.js", "js/files.js", "js/lists.js", "js/drawing.js", "js/hierarchy.js", "js/saving.js", "js/cnpy.js", "js/render.js", "js/viewer.js", "js/gl.js", "js/offline.js", "js/dropbox.js", "js/icons.js", "js/look.js", "js/tone.js", "js/version.js", "js/formulas.js", "js/tables.js", "js/pages.js", "js/cdoc.js"];
 let newer = null;
 async function checkVersion()
 {

@@ -5,7 +5,7 @@
 
 const ROWS_SINCE = 3;   // the layers.txt version from which entries have their own ids (older files open to read only)
 const SEP = "\u001f";   // between the names of the groups an object is in
-export const DENSITY = 2;   // a drawing's pixels to a canvas unit, as Board makes new ones (DrawingLayer.Density)
+export const DENSITY = 1;   // a raster layer's pixels to a canvas unit, as Board makes new ones (DrawingLayer.Density): one, a pixel a unit
 export const TILE = 256;    // a drawing's tiles, as Board's (Raster.T)
 
 // Board's escaping of a field: backslash, new line and the bar that separates fields.
@@ -205,9 +205,9 @@ export function lockers(doc, o, view) { return !o.group || doc.locks.size === 0 
 
 // ---- moving and sizing: p' = p * k + (ox, oy), as a step leaves an object ----
 
-// An object moved so (a copy, for drawing).
 // A list's width: every list is this wide, at its own scale (1), growing only downward as it fills.
 export const LIST_W = 384;
+// An object moved so (a copy, for drawing).
 export function placed(o, t)
 {
     const q = { ...o }, X = v => v * t.k + t.ox, Y = v => v * t.k + t.oy;
@@ -220,7 +220,7 @@ export function placed(o, t)
     return q;
 }
 // Its body line, moved so (only the numbers that place it changed).
-function placedLine(line, o, t)
+function placedLine(line, t)
 {
     const sp = line.indexOf(" "), key = line.substring(0, sp), f = line.substring(sp + 1).split("|");
     const X = v => n(num(v) * t.k + t.ox), Y = v => n(num(v) * t.k + t.oy), K = v => n(num(v) * t.k);
@@ -233,8 +233,8 @@ function placedLine(line, o, t)
     return key + " " + f.join("|");
 }
 // An object's body line moved by dx, dy (a document's frame, from its page's top left onto the canvas).
-export function movedLine(line, dx, dy) { return placedLine(line, null, { k: 1, ox: dx, oy: dy }); }
-export function compose(t, s)   // t then s
+export function movedLine(line, dx, dy) { return placedLine(line, { k: 1, ox: dx, oy: dy }); }
+function compose(t, s)   // t then s
 {
     return { k: t.k * s.k, ox: t.ox * s.k + s.ox, oy: t.oy * s.k + s.oy };
 }
@@ -246,7 +246,7 @@ const n = v => String(Math.round(v * 1000) / 1000);
 
 // The project's text as "view" has it: the lists' entries, names and colors; objects moved, sized or deleted; boards
 // added (after the others); and lists and photos added (after everything, on top).
-export function write(doc, view, drawn)
+function write(doc, view, drawn)
 {
     const lines = doc.lines.slice();
     const byId = new Map(view.lists.map(l => [l.id, l]));
@@ -270,7 +270,7 @@ export function write(doc, view, drawn)
             while (m.length < 6) m.push("");
             if (view.hides.has(o.id)) m[5] = view.hides.get(o.id) ? m[5].replace(/H/g, "") + "H" : m[5].replace(/H/g, "");
             const lay = movedTo(view, o.id);
-            if (lay) { const g = regrouped(doc, o, lay); m[1] = g.group; m[3] = escape(g.groupName); }
+            if (lay) { const g = regrouped(lay); m[1] = g.group; m[3] = escape(g.groupName); }
             lines[o.metaLine] = "meta " + m.join("|");
         }
         if (view.names.has(o.id) && NAME_AT[lines[o.line].split(" ")[0]] !== undefined)
@@ -293,7 +293,7 @@ export function write(doc, view, drawn)
             lines[o.line] = "paint " + f.join("|");
             continue;
         }
-        if (o.kind !== "list") { const t = view.moved.get(o.id); if (t) lines[o.line] = placedLine(lines[o.line], o, t); continue; }
+        if (o.kind !== "list") { const t = view.moved.get(o.id); if (t) lines[o.line] = placedLine(lines[o.line], t); continue; }
         const now = byId.get(o.id);
         if (!now) continue;
         cuts.push({ from: o.start, to: o.end, put: now.rows.map(rowLine) });
@@ -383,7 +383,7 @@ export function write(doc, view, drawn)
         added.push(metaLine(l.id, l.layer, l.author, l.locked), "list " + [n(l.x), n(l.y), n(l.w), n(l.scale || 1), l.ink || "#DAFF00", l.showDone ? 1 : 0, escape(l.name)].concat(l.fill ? [l.fill] : []).join("|"), ...l.rows.map(rowLine));
     for (const p of view.photos)
         added.push(metaLine(p.id, p.layer, p.author, p.locked), "image " + [p.file, n(p.x), n(p.y), n(p.w), n(p.h), 0, 0, p.pw, p.ph, escape(p.name)].join("|"));
-    for (const r of view.restored) added.push(...(r.by ? r.lines.map((l, i) => i === r.body ? placedLine(l, r.item, r.by) : l) : r.lines));   // (deleted, saved, and then brought back)
+    for (const r of view.restored) added.push(...(r.by ? r.lines.map((l, i) => i === r.body ? placedLine(l, r.by) : l) : r.lines));   // (deleted, saved, and then brought back)
     // Drawings made here, painted into tiles (paintSketches): drawing layers as Board writes them, their pixels in the
     // folder named for them, at Density pixels to a unit from the canvas's corner.
     for (const k of (drawn || []).filter(k => !k.base))
@@ -393,7 +393,7 @@ export function write(doc, view, drawn)
 }
 
 // A new, empty project, as the desktop app starts one: its colors, grid and one empty layer to put things in.
-export function blank()
+function blank()
 {
     const layer = newId();
     return ["CanopyBoard 7", "blend #EF5EB8 #DAFF00 50", "palette", "count 6", "canvas #161717", "grid 64 4", "boards - 0", "folders " + layer, "empty " + layer + " - Layer 1", ""].join("\n");
@@ -627,7 +627,7 @@ export function order(doc, view)
 export function movedTo(view, id) { let l = null; for (const z of view.zorder || []) if (z.id === id && z.layer) l = z.layer; return l; }
 // Its groups with the layer it was put into in place of the one it was in (the groups inside it left behind: it goes
 // in on its own).
-export function regrouped(doc, o, layer)
+export function regrouped(layer)
 {
     return { group: layer.id, groupName: layer.name };
 }
@@ -652,13 +652,13 @@ function keep(doc, view, id)
     const p = view.photos.find(o => o.id === id);
     if (p) return { id, photo: { ...p } };
     const r = view.restored.find(o => o.id === id);
-    if (r) return { id, lines: r.by ? r.lines.map((x, i) => i === r.body ? placedLine(x, r.item, r.by) : x) : r.lines.slice() };
+    if (r) return { id, lines: r.by ? r.lines.map((x, i) => i === r.body ? placedLine(x, r.by) : x) : r.lines.slice() };
     const o = doc.items.find(x => x.id === id);
     if (!o) return null;
     const from = o.metaLine >= 0 ? o.metaLine : o.line, lines = doc.lines.slice(from, o.lastLine + 1);
     if (view.fills && view.fills.has(id) && shaped(o)) lines[o.line - from] = filledLine(lines[o.line - from], o, view.fills.get(id));
     const t = view.moved.get(id);
-    if (t) lines[o.line - from] = placedLine(lines[o.line - from], o, t);
+    if (t) lines[o.line - from] = placedLine(lines[o.line - from], t);
     return { id, lines };
 }
 // A rectangle or oval made here, filled: its lines as Board writes them (brought in by a "restore" step, as a paste is).
@@ -724,7 +724,7 @@ export function copyIn(things, from, doc, by, layer)
         const lines = th.lines.slice(), body = one.line - 1, m = lines[0].substring(5).split("|"), g = regroup(one.group, one.groupName);
         m[0] = id; m[1] = g.group || "-"; m[3] = escape(g.groupName); m[5] = (m[5] || "").replace("L", "");
         lines[0] = "meta " + m.join("|");
-        lines[body] = placedLine(lines[body], one, by);
+        lines[body] = placedLine(lines[body], by);
         return { id, lines };
     }).filter(Boolean);
 }

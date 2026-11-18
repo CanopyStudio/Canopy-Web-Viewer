@@ -48,7 +48,7 @@ export function hierarchy()
     const build = () =>
     {
         const m = hierarchyModel(), drawing = !!pen;
-        let h = '<div class="ptitle htitle"><span>Hierarchy</span>' + (shut ? "" : '<span class="hhead"><button class="hbtn" data-do="hnewlayer" aria-label="New layer" title="New layer">' + icon("folder", 20) + '</button><button class="hbtn" data-do="hnew" aria-label="New drawing" title="New drawing">' + icon("adddrawing", 20) + "</button></span>") + "</div><div class=\"hlist\">";
+        let h = '<div class="ptitle htitle"><span>Hierarchy</span>' + (shut ? "" : '<span class="hhead"><button class="hbtn" data-do="hnewlayer" aria-label="New layer" title="New layer">' + icon("folder", 20) + '</button><button class="hbtn" data-do="hnew" aria-label="New raster layer" title="New raster layer">' + icon("adddrawing", 20) + "</button></span>") + "</div><div class=\"hlist\">";
         for (const l of m.layers)
         {
             const lid = l.id || "", hid = l.id && project.scene.hides.has(l.id), lk = l.id && layerLocked(l.id), fold = foldedLayers.has(lid);
@@ -87,14 +87,14 @@ export function hierarchy()
             step({ t: "newlayer", list: null, id: cnpy.newId(), name: "Layer " + n, below: top ? top.id : null });
             again(); return;
         }
-        if (does === "hnew") { drawOnto(null); if (!pen) drawMode(); else tools(v); toast("Your next stroke starts a new drawing"); close(() => { }); return; }
+        if (does === "hnew") { drawOnto(null); if (!pen) drawMode(); else tools(v); toast("Your next stroke starts a new raster layer"); close(() => { }); return; }
         if (does === "hlayerhide") { step({ t: "hidelayer", list: null, id: value, on: !project.scene.hides.has(value) }); redrawViewers(); again(); return; }
         if (does === "hlayerlock") { const lk = layerLocked(value); step(lk ? { t: "lock", list: null, ids: [], on: false, groups: [value] } : { t: "lock", list: null, ids: [], on: true, relock: [value] }); if (picked) tools(picked.viewer); redrawViewers(); again(); return; }
         if (does === "hlayermore") { const l = hierarchyModel().layers.find(x => x.id === value); if (l) close(() => layerMenu(l)); return; }
         if (!o) return;
         if (does === "hpick")
         {
-            if (pen && (o.kind === "paint" || o.kind === "sketch")) { drawOnto(o.id); tools(v); toast("Drawing on " + (o.name || "this drawing")); again(); return; }
+            if (pen && (o.kind === "paint" || o.kind === "sketch")) { drawOnto(o.id); tools(v); toast("Drawing on " + (o.name || "this raster layer")); again(); return; }
             close(() =>
             {
                 if (!v) return;
@@ -141,7 +141,7 @@ function moveRow(row, e, sheet)
         handle.removeEventListener("pointercancel", up);
         handle.removeEventListener("lostpointercapture", up);
         row.classList.remove("lifted"); row.style.transform = ""; line.remove();
-        if (ev && ev.type !== "pointerup") return;   // (cancelled, or taken away: put back as it was)
+        if (ev && ev.type !== "pointerup") return;   // (canceled, or taken away: put back as it was)
         const all = rows(), at = before ? all.indexOf(before) : all.length;
         // Into the layer whose heading is above the line; above the first object of the file's below it.
         let layer = null;
@@ -193,8 +193,8 @@ function objectMenu(o)
     const build = () => '<div class="ptitle mtitle"><button class="hbtn" data-do="back" aria-label="Back to Hierarchy">' + icon("back", 18) + "</button><span>" + text(kindName(o.id) + " \u00b7 " + objectName(o)) + "</span></div>"
         + (fresh ? "" : '<button class="pick" data-do="rename"><span>Rename</span></button>'
         + '<button class="pick" data-do="duplicate"><span>Duplicate</span></button>')
-        + (o.kind === "paint" ? '<button class="pick" data-do="drawon"><span>Draw on this drawing</span></button>' : "")
-        + (isPaint ? '<button class="pick" data-do="merge"' + (below ? "" : " disabled") + "><span>Merge down</span>" + (below ? '<span class="kind-name">into ' + text(below.name || "the drawing below") + "</span>" : '<span class="kind-name">no drawing below</span>') + "</button>" : "")
+        + (o.kind === "paint" ? '<button class="pick" data-do="drawon"><span>Draw on this layer</span></button>' : "")
+        + (isPaint ? '<button class="pick" data-do="merge"' + (below ? "" : " disabled") + "><span>Merge down</span>" + (below ? '<span class="kind-name">into ' + text(below.name || "the raster layer below") + "</span>" : '<span class="kind-name">no drawing below</span>') + "</button>" : "")
         + (fresh ? "" : '<button class="pick danger" data-do="delete"><span>Delete</span></button>');
     sheetUp(build, (does, value, close) =>
     {
@@ -217,12 +217,12 @@ function objectMenu(o)
             close(() => { if (v && !pen) pick({ ids: made.map(th => th.id), list: made[0].list ? made[0].id : null }, v); redrawViewers(); });
             return;
         }
-        if (does === "drawon") { drawOnto(o.id); close(() => { if (!pen) drawMode(); else tools(v); toast("Drawing on " + (o.name || "this drawing")); }); return; }
+        if (does === "drawon") { drawOnto(o.id); close(() => { if (!pen) drawMode(); else tools(v); toast("Drawing on " + (o.name || "this raster layer")); }); return; }
         if (does === "merge")
         {
             if (!below) return;
             const straight = x => !x.angle && !x.shear && !x.flipX && !x.flipY;
-            if (!straight(o) || !straight(below)) { toast("A turned or flipped drawing can't be merged here"); return; }
+            if (!straight(o) || !straight(below)) { toast("A turned or flipped raster layer can't be merged here"); return; }
             close(() => mergeDown(o, below));
             return;
         }
@@ -240,7 +240,7 @@ function drawingBelow(o)
 // moved, say) is done to all of it. Anything not saved yet (either of them new, or drawn on) saved first.
 async function mergeDown(o, below)
 {
-    const p = project, name = below.name || "the drawing below";
+    const p = project, name = below.name || "the raster layer below";
     if (!p.local && !(await savedNow(p))) { toast("Couldn't save, so it wasn't merged: try again once it saves"); return; }
     const doc = p.base.doc, saved = id => doc.items.some(x => x.id === id && x.kind === "paint");
     if (!saved(o.id) || !saved(below.id)) return;

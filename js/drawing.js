@@ -39,7 +39,7 @@ const PALETTE = ["#151616", "#FFFFFF", "#7C807E", "#C9CCCA", "#E05A47", "#F28C38
 // The drawing bar's three slots, each holding a few tools: a tap uses the one it shows, a tap again (or a press and
 // hold) picks another.
 const SLOTS = [
-    { id: "pick", tools: [["select", "select", "Select"], ["rect", "selrect", "Drawing Select (rectangle)"], ["lasso", "sellasso", "Drawing Select (lasso)"]] },
+    { id: "pick", tools: [["select", "select", "Select"], ["rect", "selrect", "Raster Select (rectangle)"], ["lasso", "sellasso", "Raster Lasso"]] },
     { id: "brush", tools: [["pen", "ink", "Ink"], ["flat", "flat", "Flat"]] },
     { id: "rub", tools: [["erase", "eraser", "Eraser"], ["fill", "fill", "Fill"], ["dropper", "dropper", "Eyedropper"]] }
 ];
@@ -108,14 +108,14 @@ export function drawBar(v, bar, host)
     bar.innerHTML = SLOTS.map(slot).join("") + '<span class="sep"></span>'
         + '<button class="glyph ink" data-act="ink" aria-label="Brush and color" title="Brush and color">' + dot(pen.size, pen.color, pen.opacity) + "</button>"
         + (paintSel ? '<button class="glyph" data-act="clear" aria-label="Delete what&#39;s selected" title="Delete what&#39;s selected">' + icon("trash", 20) + "</button>" : "")
-        + '<button class="glyph" data-act="newdrawing" aria-label="New drawing" title="New drawing">' + icon("adddrawing", 20) + "</button>"
+        + '<button class="glyph" data-act="newdrawing" aria-label="New raster layer" title="New raster layer">' + icon("adddrawing", 20) + "</button>"
         + '<button class="done" data-act="done">Done</button>';
     // (the slot in use, tapped again: its tools, as a held one shows them)
     bar.querySelectorAll("[data-slot]").forEach(b => holdable(b, () => { if (TOOL_OF[pen.kind].slot === b.dataset.slot) slotPop(v, b); else useTool(pen.slots[b.dataset.slot], v); }, () => slotPop(v, b)));
     bar.querySelector('[data-act="ink"]').addEventListener("click", e => { const b = e.currentTarget; if (popOf === b) closePop(); else inkPop(v, b); });
     const clear = bar.querySelector('[data-act="clear"]');
     if (clear) clear.addEventListener("click", () => clearSelection(v));
-    bar.querySelector('[data-act="newdrawing"]').addEventListener("click", () => { closePop(); drawOnto(null); if (TOOL_OF[pen.kind].slot !== "brush") useTool(pen.slots.brush, v); toast("Your next stroke starts a new drawing"); });
+    bar.querySelector('[data-act="newdrawing"]').addEventListener("click", () => { closePop(); drawOnto(null); if (TOOL_OF[pen.kind].slot !== "brush") useTool(pen.slots.brush, v); toast("Your next stroke starts a new raster layer"); });
     bar.querySelector('[data-act="done"]').addEventListener("click", () => endDrawing(v));
 }
 // A button that does one thing when tapped and another when held (the bar's slots: their choices).
@@ -167,7 +167,7 @@ function popFrom(btn, html, wire)
         const room = fb.width - 8;
         let L = sx + sw / 2 - W / 2;
         L = Math.max(8, Math.min(L, room - W));
-        const top = Math.round(barTop - gap - body);   // (on whole pixels, as its left: a phone draws a layer put between them soft)   // (clear of the bar, comfortably, as Board's are: only its tab reaches down)
+        const top = Math.round(barTop - gap - body);   // (clear of the bar, comfortably, as Board's are: only its tab reaches down; on whole pixels, as its left: a phone draws a layer put between them soft)
         const x = sx - L;
         const flushL = x < r + f + 2, flushR = x + sw > W - r - f - 2;
         if (flushL) L = sx; else if (flushR) L = sx + sw - W;
@@ -306,13 +306,13 @@ function markSlots(v)
     if (!bar) return;
     bar.querySelectorAll("[data-slot]").forEach(x => { const k = pen.slots[x.dataset.slot]; x.classList.toggle("on", TOOL_OF[pen.kind].slot === x.dataset.slot); x.innerHTML = icon(TOOL_OF[k].icon, 20) + '<i class="more"></i>'; });
 }
-// The next free name for a drawing: Drawing 1, 2, ..., past the project's own and those made here.
+// The next free name for a drawing: Raster 1, 2, ..., past the project's own and those made here.
 function drawingName()
 {
     const taken = new Set(project.scene.items.filter(o => o.kind === "paint" || o.kind === "sketch").map(o => o.name));
     let n = 1;
-    while (taken.has("Drawing " + n)) n++;
-    return "Drawing " + n;
+    while (taken.has("Raster " + n)) n++;
+    return "Raster " + n;
 }
 // Where what is drawn goes: the drawing being drawn on, saved (its strokes since kept together, painted onto its
 // pixels as it is saved again) or not yet saved; with neither, a new one (which it then is) unless "existing" asks
@@ -354,9 +354,10 @@ function strokeFrom(v, at, e)
 {
     const s = strokeStep(drawTarget(false), { kind: pen.kind, color: pen.color, size: pen.size, pts: [], ...(pen.opacity < 1 ? { opacity: pen.opacity } : {}) });
     const pts = s.stroke.pts;
-    // Each position eased toward, as Board's brush eases it, which irons out a finger's wobble. The eased points are then joined by a smooth curve through them (Catmull-Rom), points put
-    // along it a short way apart, so a quick sweep is as round as a slow one; the last stretch, still to come right as
-    // the next point decides its bend, is drawn each time but kept only once the next point comes (or the finger lifts).
+    // Each position eased toward, as Board's brush eases it, which irons out a finger's wobble. The eased points are
+    // then joined by a smooth curve through them (Catmull-Rom), points put along it a short way apart, so a quick sweep
+    // is as round as a slow one; the last stretch, still to come right as the next point decides its bend, is drawn
+    // each time but kept only once the next point comes (or the finger lifts).
     const lag = 0.54, gap = 2.5;   // (gap: between the points put along the curve, on the screen)
     let ex = null, ey = null, ep = 1, lx = null, ly = null, rawX = null, rawY = null, rawP = 1;
     const eased = [];   // the eased points, on the screen: x, y, pressure each
@@ -372,7 +373,7 @@ function strokeFrom(v, at, e)
         const c = v.toCanvas(x, y);
         into.push(Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(pr * 100) / 100);
     };
-    // The curve from eased point i to i + 1 (its ends' neighbours bending it), points along it after its start.
+    // The curve from eased point i to i + 1 (its ends' neighbors bending it), points along it after its start.
     const along = (i, into) =>
     {
         const q = k => { const j = Math.max(0, Math.min(eased.length / 3 - 1, k)) * 3; return [eased[j], eased[j + 1], eased[j + 2]]; };
@@ -522,7 +523,7 @@ function selectFrom(v, at)
             cancel() { project.preview = null; paintSel.by = null; refreshView(); v.redraw(); }
         };
     }
-    if (!drawTarget(true)) { toast("No drawing to select on: pick one in Hierarchy"); return null; }
+    if (!drawTarget(true)) { toast("No raster layer to select on: pick one in Hierarchy"); return null; }
     const box = pen.kind === "rect", pts = [c0.x, c0.y];
     paintSel = null;
     selecting = { pts, box };

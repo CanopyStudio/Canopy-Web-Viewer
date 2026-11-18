@@ -1,5 +1,5 @@
-/* Canopy Board on a phone: the desktop app's Forest look (its colors, type and small corners, a little rounder for
-   fingers), its lists as they are on the canvas. */
+/* Canopy Board on a phone: the desktop app's look (its colors, type and small corners, a little rounder for fingers;
+   the colors below only until app.js sets the theme's), its lists as they are on the canvas. */
 
 @font-face { font-family: "IBM Plex Sans"; src: url(fonts/IBMPlexSans-Regular.ttf); font-weight: 400; }
 @font-face { font-family: "IBM Plex Sans"; src: url(fonts/IBMPlexSans-Medium.ttf); font-weight: 500; }
@@ -112,7 +112,7 @@ svg { display: block; }
 .tabs button:active { transform: scale(.92); }
 .empty.big { padding: 80px 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
 
-/* two columns, cards falling into the shorter */
+/* columns (two on a phone), cards falling into the shortest */
 .masonry { display: flex; gap: 14px; padding: 16px calc(var(--right) + 16px) 28px calc(var(--left) + 16px); align-items: flex-start; }
 .masonry .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .lcard, .bcard { display: block; width: 100%; text-align: left; transition: transform .16s cubic-bezier(.2,.9,.3,1.2), filter .16s; }
@@ -142,7 +142,8 @@ svg { display: block; }
 
 /* the canvas to look around */
 .stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
-/* the canvas's own corner: the hierarchy and full screen (in full screen, still there, quieter, to come back out) */
+/* the canvas's own corner: Draw, Shapes, the hierarchy, Fit and full screen (in full screen, still there, quieter, to
+   come back out) */
 .corner { position: absolute; top: 10px; right: calc(var(--right) + 10px); z-index: 4; display: flex; gap: 6px; }
 .corner .icon { width: 42px; height: 42px; border-radius: var(--r-control); display: grid; place-items: center; background: var(--card); border: 1px solid var(--border); box-shadow: var(--menu-shadow); color: var(--ink); }
 .corner .icon:active { background: var(--button); }
@@ -338,8 +339,8 @@ svg { display: block; }
 .hdrop { position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
 .pick:disabled { opacity: .45; }
 
-/* ---- the drawing bar: three slots (a tap uses the tool shown, a hold picks another), the size and color, the
-   hierarchy, Done; spaced so a popover's tab clears the buttons either side ---- */
+/* ---- the drawing bar: three slots (a tap uses the tool shown, a hold picks another), the size and color, a new
+   raster layer, Done; spaced so a popover's tab clears the buttons either side ---- */
 .drawbar { gap: 10px; padding: 6px 8px 6px 6px; }
 .drawbar .slot { position: relative; }
 .drawbar .slot .more { position: absolute; right: 4px; bottom: 4px; width: 0; height: 0; border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .7; }

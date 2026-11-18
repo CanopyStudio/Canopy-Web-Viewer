@@ -8,7 +8,7 @@
 import * as cnpy from "./cnpy.js";
 
 // "a/b/c.cdoc" and "../d/e" as "a/d/e".
-export function beside(path, rel)
+function beside(path, rel)
 {
     const parts = path.split("/").slice(0, -1);
     for (const p of rel.replace(/\\/g, "/").split("/")) { if (p === "..") parts.pop(); else if (p && p !== ".") parts.push(p); }

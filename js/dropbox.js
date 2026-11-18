@@ -100,7 +100,7 @@ async function rpc(name, body)
 }
 
 // Pictures Dropbox can show a preview of (made by Dropbox, so even a phone's HEIC photos show).
-export const PICTURE = /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp)$/i;
+const PICTURE = /\.(jpe?g|png|gif|webp|heic|heif|tiff?|bmp)$/i;
 // A folder's folders, projects (.cnpy, and documents: .cdoc) and pictures ("" is the top), folders first, each by name.
 export async function list(path)
 {

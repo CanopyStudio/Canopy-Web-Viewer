@@ -1,8 +1,8 @@
 // Painting on the graphics chip (WebGL 2): while drawing, the drawing being drawn on is shown from a picture of it
 // kept on the chip, over the rest of the canvas (drawn as ever, by render.js, on the canvas under this one), with what
-// is above it laid over it (on a canvas of the page's, over this one). A stroke under way is added to a little at a time, on the chip, so it keeps up with the
-// finger however much the drawing holds; a stroke finished is painted into the drawing's picture exactly as render.js
-// would paint it. Its strokes are drawn as render.js draws them (Ink's pieces, the Flat's tip stamped along, the
+// is above it laid over it (on a canvas of the page's, over this one). A stroke under way is added to a little at a
+// time, on the chip, so it keeps up with the finger however much the drawing holds; a stroke finished is painted into
+// the drawing's picture exactly as render.js would paint it. Its strokes are drawn as render.js draws them (Ink's pieces, the Flat's tip stamped along, the
 // eraser, a fill's picture), so what shows here is what is saved. Null when the phone has no WebGL 2.
 
 import * as render from "./render.js";
@@ -165,8 +165,8 @@ export function painter(canvas)
     const drop = t => { if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); } };
     const into = (t, w, h) => { gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fbo : null); gl.viewport(0, 0, w, h); };
     const clear = () => { gl.disable(gl.SCISSOR_TEST); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); };
-    // A picture (a tile, a fill) taken onto the chip: its top row at the top (as the shapes
-    // are drawn), its colors premultiplied.
+    // A picture (a tile, a fill) taken onto the chip: its top row at the top (as the shapes are drawn), its colors
+    // premultiplied.
     const upload = (src, tex) =>
     {
         tex = tex || gl.createTexture();

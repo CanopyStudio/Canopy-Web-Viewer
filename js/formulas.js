@@ -129,7 +129,7 @@ function read(words)
     return { n: pct ? n / 100 : n, cur: m[2] || null, dec: pct ? 0 : dot < 0 ? 0 : digits.length - dot - 1, comma: digits.indexOf(",") >= 0 };
 }
 
-// Rounded as .NET's Math.Round does: a half to the even neighbor.
+// Rounded as Board rounds: a half to the even neighbor.
 function roundEven(v, d)
 {
     const m = Math.pow(10, d), x = v * m, r = Math.round(x);

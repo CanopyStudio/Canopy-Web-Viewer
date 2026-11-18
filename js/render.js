@@ -3,7 +3,7 @@
 // clipped as it is there, and a document's master pages behind its pages. Close, not exact: type lays out with the
 // browser's own shaping, and a path's dynamic corners and a blur's steps are left out.
 
-import { placed, order, movedTo, regrouped, hiddenLayers } from "./cnpy.js";
+import { placed, order, movedTo, regrouped, hiddenLayers, plain } from "./cnpy.js";
 import * as formulas from "./formulas.js";
 import { tableParts } from "./tables.js";
 import { furniture } from "./pages.js";
@@ -21,7 +21,7 @@ function rgba(c, alpha)   // "#RRGGBB" or "#AARRGGBB" as CSS, its own alpha time
 }
 function rgb(c) { const s = (c || "#000000").replace("#", "").slice(-6); return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)]; }
 function hex(v) { return "#" + v.map(x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0")).join(""); }
-export function mix(a, b, t) { const x = rgb(a), y = rgb(b); return hex(x.map((v, i) => Math.floor(v + (y[i] - v) * t + 0.5))); }
+function mix(a, b, t) { const x = rgb(a), y = rgb(b); return hex(x.map((v, i) => Math.floor(v + (y[i] - v) * t + 0.5))); }
 export function dark(c) { const [r, g, b] = rgb(c); return (r * 299 + g * 587 + b * 114) / 1000 <= 140; }
 export function shade(c, t) { return mix(c, dark(c) ? "#ffffff" : "#000000", t); }
 function toHsv([r, g, b])
@@ -49,10 +49,10 @@ export function bright(c)
     const [h, s, v] = toHsv(rgb(c)), sa = s < 0.15 ? s : Math.max(s, 0.6), va = Math.max(v, 0.82);
     return hex(fromHsv(h, sa * 0.82, va)).toUpperCase();
 }
-// A list's colors, as Board makes them from its own color (or the theme's, with none).
 // The theme on show (one of Canopy Board's: its colors by their names there), for lists without a color of their own.
 let look = { Note: "#262927", "Note row": "#313534", Heading: "#D2F6D1", Ink: "#EAECEB" };
 export function setTheme(colors) { look = colors; }
+// A list's colors, as Board makes them from its own color (or the theme's, with none).
 export function listLook(list)
 {
     const card = list.fill ? derived(list.fill, 10) : look.Note, tile = list.fill ? derived(list.fill, 11) : look["Note row"];
@@ -72,7 +72,7 @@ function wantFont(family, weight, italic, redraw)
     let w = Object.keys(weights).map(Number).reduce((a, b) => Math.abs(b - weight) < Math.abs(a - weight) ? b : a, 400);
     if (family === "IBM Plex Sans" && (w < 400 || w > 700)) w = w < 400 ? 400 : 700;
     const name = weights[w] === "Regular" && italic ? "Italic" : weights[w] + (italic ? "Italic" : "");
-    const key = file + "-" + (name === "Regular" ? "Regular" : name);
+    const key = file + "-" + name;
     if (fontsAsked.has(key)) return;
     fontsAsked.add(key);
     const face = new FontFace(family, "url(fonts/" + key + ".ttf)", { weight: String(w), style: italic ? "italic" : "normal" });
@@ -359,7 +359,7 @@ export function scene(doc, view)
         if (view.names && view.names.has(o.id)) q = { ...q, name: view.names.get(o.id) };
         if (view.fills && view.fills.has(o.id)) q = { ...q, fill: view.fills.get(o.id) };
         const lay = movedTo(view, o.id);
-        if (lay) q = { ...q, ...regrouped(doc, o, lay) };
+        if (lay) q = { ...q, ...regrouped(lay) };
         return q;
     };
     // (a drawing as it was before a save: its pixels then, where they were)
@@ -446,12 +446,12 @@ function placing(o, b)   // slanted, then turned, about the box's middle
     return new DOMMatrix().translate(cx, cy).rotate(o.angle || 0).multiply(new DOMMatrix([1, 0, -Math.tan((o.shear || 0) * Math.PI / 180), 1, 0, 0])).translate(-cx, -cy);
 }
 
-// Everything's extent; and one board's.
-export function extent(sc, ctx)
+// Everything's extent: what is shown, and the boards.
+export function extent(sc)
 {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     const add = b => { if (!(b.w >= 0) || !isFinite(b.x)) return; x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); };
-    sc.items.forEach(o => { if (!hidden(sc, o)) add(outer(o, ctx)); });
+    sc.items.forEach(o => { if (!hidden(sc, o)) add(outer(o)); });
     sc.boards.forEach(add);
     return x0 === Infinity ? { x: 0, y: 0, w: 1000, h: 800 } : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
@@ -502,7 +502,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
         {
             for (const path of groupsOf(o.group).paths) { const m = sc.masks.get(path); if (m && m !== o) { const p = outline(m); if (p) g.clip(p); } }
         }
-        try { if (o.fx) blurred(g, o.fx, s, h2 => drawOne(h2, o, doc, s, get, redraw, opts.wet)); else drawOne(g, o, doc, s, get, redraw, opts.wet); } catch (e) { }
+        try { if (o.fx) blurred(g, o.fx, h2 => drawOne(h2, o, doc, s, get, redraw, opts.wet)); else drawOne(g, o, doc, s, get, redraw, opts.wet); } catch (e) { }
         g.restore();
     };
     // A group with an effect (a blur): what is in it drawn together, then blurred as one (each group inside it too).
@@ -519,7 +519,7 @@ export function draw(ctx, sc, cam, w, h, dpr, get, redraw, opts)
             const was = run.path;
             run.path = paths;
             let next = i;
-            blurred(g, fx, s, h2 => { next = run(h2, i, k + 1); });
+            blurred(g, fx, h2 => { next = run(h2, i, k + 1); });
             run.path = was;
             i = Math.max(next, i + 1);
         }
@@ -575,9 +575,9 @@ function reachOfStroke(st)
     return r;
 }
 // Strokes drawn onto a canvas set to canvas units: Ink's line as wide as it is pressed, the Flat's its roughened tip
-// stamped along, an eraser rubbing out (on the drawing's own canvas: only what is drawn there). A
-// stroke less than fully opaque is drawn on a canvas of its own first and laid on as a whole, so where it crosses
-// itself it is no stronger.
+// stamped along, an eraser rubbing out (on the drawing's own canvas: only what is drawn there). A stroke less than
+// fully opaque is drawn on a canvas of its own first and laid on as a whole, so where it crosses itself it is no
+// stronger.
 export function drawStrokes(g, strokes)
 {
     for (const st of strokes)
@@ -1298,7 +1298,7 @@ function drawOne(ctx, o, doc, s, get, redraw, wet)
 // ---- type ----
 
 function cased(t, c) { return c === 1 ? t.toUpperCase() : c === 2 ? t.toLowerCase() : c === 3 ? t.replace(/\b\p{L}/gu, x => x.toUpperCase()) : t; }
-export function wrap(ctx, text, width)
+function wrap(ctx, text, width)
 {
     const out = [];
     for (const para of text.split("\n"))
@@ -1394,7 +1394,7 @@ function layType(ctx, o, width, redraw)
     return lines;
 }
 // How tall type comes out at its width (a table's cells).
-export function measureType(o) { const ctx = measureCtx(); const hs = o.hscale || 1; return layType(ctx, o, o.fixed ? o.w / hs : 0, () => { }).reduce((a, l) => a + l.h, 0); }
+function measureType(o) { const ctx = measureCtx(); const hs = o.hscale || 1; return layType(ctx, o, o.fixed ? o.w / hs : 0, () => { }).reduce((a, l) => a + l.h, 0); }
 function drawType(ctx, o, b, redraw)
 {
     const hs = o.hscale || 1, room = b.w / hs;
@@ -1437,7 +1437,7 @@ function drawType(ctx, o, b, redraw)
 // ---- blurs (Board's Effects): Gaussian, or a smear one way ("m"), by an amount in canvas units ----
 
 let blurCanvases = [];
-function blurred(ctx, fx, s, drawFn)
+function blurred(ctx, fx, drawFn)
 {
     const m = /^([gm])([\d.]+)(?:@(-?[\d.]+))?/.exec(fx || "");
     if (!m) { drawFn(ctx); return; }
@@ -1475,7 +1475,7 @@ const NOTE = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 let measurer = null;
 function measureCtx(ctx) { if (ctx) return ctx; if (!measurer) measurer = document.createElement("canvas").getContext("2d"); return measurer; }
 const BAND = 10;   // a list's color, as a band along its card's top edge
-export function listLayout(o, ctx)
+function listLayout(o, ctx)
 {
     // (laid out once for each list as the steps leave it, which is never changed after: the same one again, at once;
     // a copy of it, as more steps are done, checked by what it shows)
@@ -1498,7 +1498,7 @@ export function listLayout(o, ctx)
             const head = r.kind === "H";
             c.font = (head ? "700 17px " : "400 15px ") + NOTE;
             const left = r.kind === "T" ? 46 : head ? 4 : 16, right = r.link ? 38 : 14;
-            lines = wrap(c, plainWords(r.text), w - 40 - left - right);
+            lines = wrap(c, plain(r.text), w - 40 - left - right);
             const th = lines.length * (head ? 22 : 20);
             h = head ? Math.max(30, th + 10) : Math.max(44, th + 26);
         }
@@ -1509,7 +1509,6 @@ export function listLayout(o, ctx)
     o._layout = { key, title, entries, h: y + 10, of: o, rows: o.rows };
     return o._layout;
 }
-function plainWords(t) { return (t || "").replace(/\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*/g, "$1").replace(/\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*/g, "$1"); }
 function drawList(ctx, o)
 {
     const L = listLayout(o, ctx), look = listLook(o), w = o.w / o.scale;
@@ -1577,7 +1576,7 @@ export function objectAt(sc, x, y, slack)
 }
 
 // What an entry's link goes to, on the canvas: a board, or an object (with the group it is in, past its layer).
-export function linked(sc, id, ctx)
+export function linked(sc, id)
 {
     const b = sc.boards.find(o => o.id === id);
     if (b) return { board: b, area: b };
@@ -1587,6 +1586,6 @@ export function linked(sc, id, ctx)
     if (o.group) { const ids = o.group.split("/"); const k = sc.doc.folders.has(ids[0]) ? 1 : 0; if (ids.length > k) group = ids.slice(0, k + 1).join("/"); }
     const with_ = group ? sc.items.filter(x => x.group && (x.group === group || x.group.startsWith(group + "/"))) : [o];
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const x of with_) { const q = outer(x, ctx); x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x + q.w); y1 = Math.max(y1, q.y + q.h); }
+    for (const x of with_) { const q = outer(x); x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x + q.w); y1 = Math.max(y1, q.y + q.h); }
     return { item: o, area: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
 }

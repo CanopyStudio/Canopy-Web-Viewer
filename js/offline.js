@@ -56,7 +56,7 @@ export async function all()
     return list.map(p => ({ path: p.path, size: p.bytes ? p.bytes.byteLength : 0, at: p.at }));
 }
 // Whether a project is kept (known once "all" has been asked, at the start; kept up to date after).
-export let kept = new Set();
+let kept = new Set();
 export function has(path) { return kept.has(path); }
 
 // ---- changes not yet saved ----

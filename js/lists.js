@@ -8,9 +8,9 @@ import { thumbnail } from "./viewer.js";
 import { act, app, arranging, bar, calm, closeViewers, current, editing, element, feel, grow, holdScroll, icon, iconButton, letScroll, open, problem, project, remember, remembered, setArranging, setEditing, setOpen, sheetUp, show, sortedLists, step, stepTo, stillDown, text, undoable, undoButtons, wire } from "./app.js";
 import { statusHtml } from "./saving.js";
 
-export function setOneColumn(on) { oneColumn = on; remember("canopy.onecolumn", on); }
-// Two columns, each card going into the shorter one (so they sit together however tall they are).
 export let oneColumn = remembered("canopy.onecolumn", false);   // the lists in one column (the account menu's)
+export function setOneColumn(on) { oneColumn = on; remember("canopy.onecolumn", on); }
+// Columns (two on a phone), each card going into the shortest one (so they sit together however tall they are).
 export function masonry(holder, cards, single)
 {
     const wide = Math.min(holder.clientWidth || innerWidth, 1100), n = single ? 1 : wide >= 1000 ? 4 : wide >= 720 ? 3 : 2;   // (more columns on a wider screen)
@@ -338,7 +338,7 @@ export function keyDown(e)
     }
 }
 
-// ---- moving entries (Edit mode): held by the handle and dragged ----
+// ---- moving entries (Reorder): held by the handle and dragged ----
 
 export function drag(handle, e)
 {
@@ -551,7 +551,7 @@ function linkTargets()
         let g = null;
         if (o.group) { const ids = o.group.split("/"); const k = doc.folders.has(ids[0]) ? 1 : 0; if (ids.length > k) g = ids.slice(0, k + 1).join("/"); }
         if (g) { if (groups.has(g)) continue; groups.add(g); out.push({ id: o.id, name: (o.groupName || "").split("\u001f")[g.split("/").length - 1] || "Group", kind: "Group", items: sc.items.filter(x => x.group && (x.group === g || x.group.startsWith(g + "/"))) }); continue; }
-        const kinds = { list: "List", image: "Image", type: "Type", paint: "Drawing", rect: "Rectangle", oval: "Ellipse", path: "Path", line: "Line", arrow: "Arrow" };
+        const kinds = { list: "List", image: "Image", type: "Type", paint: "Raster layer", rect: "Rectangle", oval: "Ellipse", path: "Path", line: "Line", arrow: "Arrow" };
         out.push({ id: o.id, name: o.kind === "list" ? o.name || "List" : o.kind === "type" ? (o.text || "").split("\n")[0].slice(0, 40) : o.name || kinds[o.kind], kind: kinds[o.kind] || "Object", items: [o] });
     }
     return out;
@@ -600,11 +600,11 @@ export function listMenu()
     finishTyping(false, false);
     const build = () =>
     {
-    const l = current();
-    return '<div class="section first">List color</div>' + swatches(l.fill, colors(), "fill", "The theme's")
-        + '<div class="section">Band color</div>' + swatches(l.ink, colors(), "ink", null)
-        + '<div class="actions"><button class="action" data-do="done"><span>' + (l.showDone ? "Hide completed" : "Show completed") + "</span></button>"
-        + '<button class="action danger' + (sure ? " sure" : "") + '" data-do="dellist">' + icon("trash", 18) + "<span>" + (sure ? "Tap again to delete" : "Delete list") + "</span></button></div>";
+        const l = current();
+        return '<div class="section first">List color</div>' + swatches(l.fill, colors(), "fill", "The theme's")
+            + '<div class="section">Band color</div>' + swatches(l.ink, colors(), "ink", null)
+            + '<div class="actions"><button class="action" data-do="done"><span>' + (l.showDone ? "Hide completed" : "Show completed") + "</span></button>"
+            + '<button class="action danger' + (sure ? " sure" : "") + '" data-do="dellist">' + icon("trash", 18) + "<span>" + (sure ? "Tap again to delete" : "Delete list") + "</span></button></div>";
     };
     let sure = false;
     sheetUp(build, (does, value, close, again) =>
