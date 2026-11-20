@@ -127,7 +127,8 @@ export class Viewer
         const o = sc.items[at];
         if ((o.kind !== "sketch" && o.kind !== "paint") || o.angle || o.shear || o.flipX || o.flipY || (o.blend && o.blend !== "normal") || o.merged || render.hidden(sc, o)) return null;
         if (o.group && sc.masks.size && render.groupsOf(o.group).paths.some(g => sc.masks.has(g))) return null;   // (clipped by a mask)
-        if ((o.strokes || []).some(st => st.kind === "move" || st.kind === "clear")) return null;   // (selections moved or cleared: drawn here)
+        const sts = o.strokes || [], lastSt = sts[sts.length - 1];
+        if (lastSt && lastSt.kind === "move") return null;   // (a selection being moved, or just moved: drawn here, the piece lifted once and laid on as the finger goes)
         for (let i = at + 1; i < sc.items.length; i++) { const x = sc.items[i]; if (x.blend && x.blend !== "normal" && !render.hidden(sc, x)) return null; }   // (something over it blending with it: drawn here, together)
         if (!this.painter)
         {

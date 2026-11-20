@@ -33,6 +33,7 @@ export function shapeColors(v, btn)
 export let pen = null;          // drawing: { kind: the tool in use, slots: the tool each of the bar's slots shows, size (on the screen), color }; null when not
 let sketchId = null;     // the strokes on a saved drawing since it was last saved: kept together under this id
 export let paintSel = null;     // what is selected of the drawing being drawn on (Drawing Select): { pts: its outline, on the canvas }
+let copyNext = false;            // (Duplicate tapped: the next drag of the selection moves a copy of it, the original left)
 const SIZE = { least: 1, most: 120, start: 8 };   // the brush's size, on the canvas (as Board's: the same however far in it is zoomed)
 // The palette to begin with (each phone keeps its own, changed as it likes): grays, then round the colors.
 const PALETTE = ["#151616", "#FFFFFF", "#7C807E", "#C9CCCA", "#E05A47", "#F28C38", "#F2C53A", "#4FB477", "#2FA3A0", "#3F8FD8", "#8E5BD6", "#E45FA8", "#8B5E3C", "#F1D7B0"];
@@ -107,12 +108,15 @@ export function drawBar(v, bar, host)
     };
     bar.innerHTML = SLOTS.map(slot).join("") + '<span class="sep"></span>'
         + '<button class="glyph ink" data-act="ink" aria-label="Brush and color" title="Brush and color">' + dot(pen.size, pen.color, pen.opacity) + "</button>"
+        + (paintSel ? '<button class="glyph' + (copyNext ? " on" : "") + '" data-act="dup" aria-label="Duplicate what&#39;s selected (then drag it)" title="Duplicate (then drag it)">' + icon("copy", 20) + "</button>" : "")
         + (paintSel ? '<button class="glyph" data-act="clear" aria-label="Delete what&#39;s selected" title="Delete what&#39;s selected">' + icon("trash", 20) + "</button>" : "")
         + '<button class="glyph" data-act="newdrawing" aria-label="New raster layer" title="New raster layer">' + icon("adddrawing", 20) + "</button>"
         + '<button class="done" data-act="done">Done</button>';
     // (the slot in use, tapped again: its tools, as a held one shows them)
     bar.querySelectorAll("[data-slot]").forEach(b => holdable(b, () => { if (TOOL_OF[pen.kind].slot === b.dataset.slot) slotPop(v, b); else useTool(pen.slots[b.dataset.slot], v); }, () => slotPop(v, b)));
     bar.querySelector('[data-act="ink"]').addEventListener("click", e => { const b = e.currentTarget; if (popOf === b) closePop(); else inkPop(v, b); });
+    const dup = bar.querySelector('[data-act="dup"]');
+    if (dup) dup.addEventListener("click", () => { copyNext = !copyNext; dup.classList.toggle("on", copyNext); if (copyNext) toast("Drag the selection to place a copy"); });
     const clear = bar.querySelector('[data-act="clear"]');
     if (clear) clear.addEventListener("click", () => clearSelection(v));
     bar.querySelector('[data-act="newdrawing"]').addEventListener("click", () => { closePop(); drawOnto(null); if (TOOL_OF[pen.kind].slot !== "brush") useTool(pen.slots.brush, v); toast("Your next stroke starts a new raster layer"); });
@@ -509,14 +513,14 @@ function selectFrom(v, at)
     {
         const tg = drawTarget(true);
         if (!tg) { paintSel = null; v.redraw(); return null; }
-        const s = strokeStep(tg, { kind: "move", pts: paintSel.pts.slice(), dx: 0, dy: 0 });
+        const s = strokeStep(tg, copyNext ? { kind: "move", pts: paintSel.pts.slice(), dx: 0, dy: 0, keep: true } : { kind: "move", pts: paintSel.pts.slice(), dx: 0, dy: 0 });
         project.preview = s; refreshView(); v.redraw();
         return {
             move(now) { const c = v.toCanvas(now.x, now.y); s.stroke.dx = Math.round((c.x - c0.x) * 10) / 10; s.stroke.dy = Math.round((c.y - c0.y) * 10) / 10; paintSel.by = { dx: s.stroke.dx, dy: s.stroke.dy }; refreshView(); v.redraw(); },   // (its outline going along with it)
             end()
             {
                 project.preview = null; paintSel.by = null;
-                if (s.stroke.dx || s.stroke.dy) { step(s); paintSel = { pts: paintSel.pts.map((q, i) => q + (i % 2 ? s.stroke.dy : s.stroke.dx)) }; }
+                if (s.stroke.dx || s.stroke.dy) { step(s); copyNext = false; paintSel = { pts: paintSel.pts.map((q, i) => q + (i % 2 ? s.stroke.dy : s.stroke.dx)) }; }
                 else refreshView();
                 redrawViewers();
             },
@@ -525,7 +529,7 @@ function selectFrom(v, at)
     }
     if (!drawTarget(true)) { toast("No raster layer to select on: pick one in Hierarchy"); return null; }
     const box = pen.kind === "rect", pts = [c0.x, c0.y];
-    paintSel = null;
+    paintSel = null; copyNext = false;
     selecting = { pts, box };
     v.redraw();
     return {

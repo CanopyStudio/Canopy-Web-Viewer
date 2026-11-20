@@ -265,7 +265,7 @@ export function painter(canvas)
         gl.uniform2f(quad.u.size, w, h);
         gl.uniform1f(quad.u.alpha, alpha);
         gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
-        if (how === "out") gl.blendFunc(gl.ZERO, gl.ONE_MINUS_SRC_ALPHA); else if (how === "copy") gl.disable(gl.BLEND); else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        if (how === "out") gl.blendFunc(gl.ZERO, gl.ONE_MINUS_SRC_ALPHA); else if (how === "in") gl.blendFunc(gl.ZERO, gl.SRC_ALPHA); else if (how === "copy") gl.disable(gl.BLEND); else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
     }
@@ -279,6 +279,14 @@ export function painter(canvas)
     const strokeBox = st =>
     {
         if (st.kind === "fill") return { x: st.x, y: st.y, w: st.w, h: st.h };
+        if (st.kind === "move" || st.kind === "clear")
+        {
+            // (its outline, and for a move, where the piece went too)
+            const q = st.pts, dx = st.dx || 0, dy = st.dy || 0;
+            let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+            for (let i = 0; i < q.length; i += 2) { a = Math.min(a, q[i], q[i] + dx); b = Math.min(b, q[i + 1], q[i + 1] + dy); c = Math.max(c, q[i], q[i] + dx); d = Math.max(d, q[i + 1], q[i + 1] + dy); }
+            return { x: a - 1, y: b - 1, w: c - a + 2, h: d - b + 2 };
+        }
         const r = st.size / 2 + 2, p = st.pts;
         let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
         for (let i = 0; i < p.length; i += 3) { x0 = Math.min(x0, p[i] - r); y0 = Math.min(y0, p[i + 1] - r); x1 = Math.max(x1, p[i] + r); y1 = Math.max(y1, p[i + 1] + r); }
@@ -289,6 +297,7 @@ export function painter(canvas)
     {
         const k = L.k;
         if (st.kind !== "fill" && !(st.pts && st.pts.length)) return true;   // (no points: nothing to paint)
+        if (st.kind === "move" || st.kind === "clear") { editStroke(st); return true; }
         if (st.kind === "fill")
         {
             const img = render.fillImage(st);
@@ -315,6 +324,36 @@ export function painter(canvas)
         const alpha = st.opacity === undefined ? 1 : st.opacity;
         drawQuad(scratch.tex, [x0, y0, bw, bh], [0, bh / scratch.h, bw / scratch.w, 0], L.t.w, L.t.h, alpha, st.kind === "erase" ? "out" : "over");
         return true;
+    }
+    // What is selected rubbed out ("clear"), or lifted and laid down again by dx, dy ("move"), as render.js does it
+    // (drawEdit): its outline made a mask on a small canvas of the page's, the piece copied out through it.
+    let mask = null, maskTex = null;
+    function editStroke(st)
+    {
+        const k = L.k, W = L.t.w, H = L.t.h, q = st.pts;
+        let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+        for (let i = 0; i < q.length; i += 2) { const X = (q[i] - L.x) * k, Y = (q[i + 1] - L.y) * k; a = Math.min(a, X); b = Math.min(b, Y); c = Math.max(c, X); d = Math.max(d, Y); }
+        const x0 = Math.max(0, Math.floor(a) - 1), y0 = Math.max(0, Math.floor(b) - 1), x1 = Math.min(W, Math.ceil(c) + 1), y1 = Math.min(H, Math.ceil(d) + 1), bw = x1 - x0, bh = y1 - y0;
+        if (bw <= 0 || bh <= 0) return;
+        mask = mask || document.createElement("canvas");
+        mask.width = bw; mask.height = bh;
+        const g = mask.getContext("2d");
+        g.fillStyle = "#fff"; g.beginPath();
+        for (let i = 0; i < q.length; i += 2) { const X = (q[i] - L.x) * k - x0, Y = (q[i + 1] - L.y) * k - y0; if (i === 0) g.moveTo(X, Y); else g.lineTo(X, Y); }
+        g.closePath(); g.fill();
+        maskTex = upload(mask, maskTex);
+        mask.width = mask.height = 0;   // (let go at once: a phone's browser allows only so much canvas)
+        const move = st.kind === "move";
+        if (move)
+        {
+            if (!scratch || scratch.w < bw || scratch.h < bh) { drop(scratch); scratch = target(Math.min(most, Math.max(bw, scratch ? scratch.w : 0, 512)), Math.min(most, Math.max(bh, scratch ? scratch.h : 0, 512))); }
+            into(scratch, bw, bh); clear();
+            drawQuad(L.t.tex, [0, 0, bw, bh], [x0 / W, (H - y0) / H, x1 / W, (H - y1) / H], bw, bh, 1, "copy");
+            drawQuad(maskTex, [0, 0, bw, bh], [0, 1, 1, 0], bw, bh, 1, "in");
+        }
+        into(L.t, W, H);
+        if (!st.keep) drawQuad(maskTex, [x0, y0, bw, bh], [0, 1, 1, 0], W, H, 1, "out");   // ("keep": a copy moved, the original left)
+        if (move) drawQuad(scratch.tex, [x0 + (st.dx || 0) * k, y0 + (st.dy || 0) * k, bw, bh], [0, bh / scratch.h, bw / scratch.w, 0], W, H, 1, "over");
     }
     // The drawing's picture made to match: made anew over the part of the canvas it needs (its pixels, then its
     // strokes), or just its new strokes painted in. "upto": its strokes counted (one under way left off).

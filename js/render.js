@@ -97,7 +97,7 @@ export function forget(c) { if (!c) return; for (const e of c.seen.values()) { i
 export function pictures(doc, added, redraw, c)
 {
     c = c || cache();
-    const bytesOf = file => added && added.has(file) ? Promise.resolve(added.get(file)) : extraBytes.has(file) ? Promise.resolve(extraBytes.get(file)) : doc.zip.file(file) ? doc.zip.file(file).async("uint8array") : null;
+    const bytesOf = file => added && added.has(file) ? Promise.resolve(added.get(file)) : doc.zip.file(file) ? doc.zip.file(file).async("uint8array") : extraBytes.has(file) ? Promise.resolve(extraBytes.get(file)) : null;   // (the file's own first: Board keeps a drawing's tiles under the same names as it paints it again)
     const next = () =>
     {
         while (c.busy < 2 && c.queue.length)
@@ -146,7 +146,7 @@ export function pictures(doc, added, redraw, c)
     {
         const pre = doc.zip.file("previews/" + file + ".webp"), size = pre ? (await previewSizes(doc)).get(file) : null;
         if (pre && size) { const img = await createImageBitmap(new Blob([await pre.async("uint8array")], { type: "image/webp" })); stats.previews++; return { img, k: img.width / size.w, full: false, src: size, from: "Board's preview in the file" }; }
-        const keptCopy = await kept(file);
+        const keptCopy = await kept(copyKey(doc, file));
         if (keptCopy)
         {
             const img = await createImageBitmap(keptCopy.blob);
@@ -154,7 +154,7 @@ export function pictures(doc, added, redraw, c)
             img.close();   // (a blank copy: made again below)
         }
         const got = await decode(await bytes, SMALL);
-        if (!got.full && !blank(got.img)) { stats.made++; keep(file, got.img, got.src); }   // (kept only if it has something in it)
+        if (!got.full && !blank(got.img)) { stats.made++; keep(copyKey(doc, file), got.img, got.src); }   // (kept only if it has something in it)
         return got;
     }
     return get;
@@ -179,6 +179,14 @@ let store = null;
 // ("canopy-small-2": the copies made before blank pictures were spotted, some of them blank, are let go)
 try { indexedDB.deleteDatabase("canopy-small"); } catch (e) { }
 function copies() { return store || (store = new Promise((ok, no) => { const r = indexedDB.open("canopy-small-2", 1); r.onupgradeneeded = () => r.result.createObjectStore("small"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); })); }
+// What this device's copy of a picture is kept under: its name and what is in it (the zip's check of its bytes), so a
+// picture changed under the same name (a drawing Board has painted again) is made again, not shown as it was.
+function copyKey(doc, file)
+{
+    const e = doc.zip.file(file), d = e && e._data;
+    const sig = d && d.crc32 !== undefined ? d.crc32 + "." + d.uncompressedSize : e && e.date ? +e.date : "";
+    return sig === "" ? file : file + "#" + sig;
+}
 async function kept(file)
 {
     try { const db = await copies(); return await new Promise(ok => { const r = db.transaction("small").objectStore("small").get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); }); }
@@ -324,7 +332,6 @@ const extraTiles = new Map(), extraBytes = new Map();
 export function keepSnap(snap) { if (!extraTiles.has(snap.file)) { extraTiles.set(snap.file, snap.tiles); for (const [f, b] of snap.files) extraBytes.set(f, b); } }
 export function tilesOf(doc, folder)   // a drawing's tiles: their places (column, row) and file names
 {
-    if (extraTiles.has(folder)) return extraTiles.get(folder);
     if (!doc._tiles) doc._tiles = new Map();
     if (doc._tiles.has(folder)) return doc._tiles.get(folder);
     const out = [];
@@ -334,6 +341,7 @@ export function tilesOf(doc, folder)   // a drawing's tiles: their places (colum
         const at = path.substring(folder.length).replace(".png", "").replace(/−/g, "-").split("_");
         if (at.length === 2) out.push({ c: parseInt(at[0], 10), r: parseInt(at[1], 10), file: path });
     });
+    if (out.length === 0 && extraTiles.has(folder)) return extraTiles.get(folder);   // (not in this file: kept from before a save, to undo past it; the file's own come first, Board keeping the same names)
     doc._tiles.set(folder, out);
     return out;
 }
@@ -841,7 +849,7 @@ function drawEdit(g, st)
             pc.setTransform(m.a, m.b, m.c, m.d, m.e - x0, m.f - y0); outlinePath(pc, p); pc.clip();
             pc.setTransform(1, 0, 0, 1, 0, 0); pc.drawImage(cv, -x0, -y0);
         }
-        g.globalCompositeOperation = "destination-out"; outlinePath(g, p); g.fillStyle = "#000"; g.fill();
+        if (!st.keep) { g.globalCompositeOperation = "destination-out"; outlinePath(g, p); g.fillStyle = "#000"; g.fill(); }   // ("keep": a copy moved, the original left)
         g.globalCompositeOperation = "source-over";
         if (piece)
         {
@@ -886,7 +894,7 @@ function keptDrawing(ctx, o, b, doc, get, m, upto)
             piece.width = hole.width = W; piece.height = hole.height = H;
             const pc = piece.getContext("2d"), hc = hole.getContext("2d");
             at(pc); outlinePath(pc, last.pts); pc.clip(); pc.setTransform(1, 0, 0, 1, 0, 0); pc.drawImage(c.canvas, 0, 0);
-            hc.drawImage(c.canvas, 0, 0); at(hc); hc.globalCompositeOperation = "destination-out"; outlinePath(hc, last.pts); hc.fillStyle = "#000"; hc.fill();
+            hc.drawImage(c.canvas, 0, 0); if (!last.keep) { at(hc); hc.globalCompositeOperation = "destination-out"; outlinePath(hc, last.pts); hc.fillStyle = "#000"; hc.fill(); }
             mv = c.lifted = { sid: last.sid, ver: c.ver, piece, hole };
         }
         ctx.imageSmoothingQuality = "low";
